@@ -57,4 +57,6 @@ export interface IndexStats {
   sources: { source: Source; documents: number; newest: string | null; lastSync: string | null }[];
   documents: number;
   chunks: number;
+  /** Drive, Gmail and Chat are searched live at question time. */
+  liveGoogle?: boolean;
 }

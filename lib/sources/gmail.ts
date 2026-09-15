@@ -62,16 +62,16 @@ export async function syncGmail(ctx: SyncContext): Promise<number> {
   return updated;
 }
 
-function header(message: gmail_v1.Schema$Message, name: string): string {
+export function header(message: gmail_v1.Schema$Message, name: string): string {
   const wanted = name.toLowerCase();
   return message.payload?.headers?.find((h) => h.name?.toLowerCase() === wanted)?.value ?? "";
 }
 
-function messageDate(message: gmail_v1.Schema$Message): string {
+export function messageDate(message: gmail_v1.Schema$Message): string {
   return new Date(Number(message.internalDate ?? Date.now())).toISOString();
 }
 
-function bodyText(part: gmail_v1.Schema$MessagePart | undefined): string {
+export function bodyText(part: gmail_v1.Schema$MessagePart | undefined): string {
   if (!part) return "";
   const plain = findPart(part, "text/plain");
   if (plain) return decode(plain);
@@ -93,7 +93,7 @@ function decode(data: string): string {
 }
 
 /** Drop the quoted history each reply repeats; the earlier messages are already in the thread. */
-function stripQuoted(text: string): string {
+export function stripQuoted(text: string): string {
   const lines = text.split(/\r?\n/);
   const cut = lines.findIndex((l) => {
     const t = l.trim();

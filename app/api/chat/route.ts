@@ -1,7 +1,13 @@
 import { answerQuestion, describeAssistantError } from "@/lib/assistant";
+import { env } from "@/lib/config";
 import type { AssistantEvent, HistoryTurn } from "@/lib/types";
 
 export async function POST(request: Request) {
+  // The web chat has no login, so on Vercel it stays off unless WEB_CHAT_ENABLED=true.
+  if (process.env.VERCEL && env("WEB_CHAT_ENABLED") !== "true") {
+    return Response.json({ error: "The web chat is turned off on this deployment. Ask the assistant in Google Chat." }, { status: 403 });
+  }
+
   const body = (await request.json().catch(() => null)) as { question?: unknown; history?: unknown } | null;
   const question = typeof body?.question === "string" ? body.question.trim() : "";
   if (!question) return Response.json({ error: "Ask a question." }, { status: 400 });

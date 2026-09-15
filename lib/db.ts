@@ -29,7 +29,8 @@ export interface ChunkRow {
   text: string;
 }
 
-const DB_PATH = path.join(process.cwd(), "data", "knowledge.sqlite");
+// Vercel functions can only write to /tmp, which is temporary: fine for delivery dedupe and short thread memory.
+const DB_PATH = path.join(process.env.VERCEL ? "/tmp" : process.cwd(), "data", "knowledge.sqlite");
 
 export const CHUNK_COLUMNS = `c.id AS chunkId, d.id AS docId, d.source, d.title, d.url, d.container,
   d.author, d.updated_at AS updatedAt, c.text`;

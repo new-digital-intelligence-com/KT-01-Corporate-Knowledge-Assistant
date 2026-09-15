@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   SOURCE_LABELS,
-  type AnswerStatus,
   type AssistantEvent,
   type FinalAnswer,
   type HistoryTurn,
@@ -27,12 +26,6 @@ const EXAMPLES = [
   "How do I submit an expense claim, and is there a deadline?",
   "What did we decide about pricing for next quarter?",
 ];
-
-const STATUS: Record<AnswerStatus, { label: string; className: string }> = {
-  verified: { label: "Verified against sources", className: styles.statusVerified },
-  partially_verified: { label: "Partly verified: some statements aren't fully backed", className: styles.statusPartial },
-  not_found: { label: "Not found in company sources", className: styles.statusNotFound },
-};
 
 const VERDICT: Record<Verdict, { mark: string; label: string; className: string }> = {
   supported: { mark: "✓", label: "Supported", className: styles.verdictSupported },
@@ -122,7 +115,7 @@ export default function Home() {
       <header className={styles.header}>
         <div>
           <h1 className={styles.title}>Company Knowledge Assistant</h1>
-          <p className={styles.subtitle}>Answers from Slack, Google Drive, Gmail and Google Chat, checked against the sources.</p>
+          <p className={styles.subtitle}>Searches Google Drive, Gmail and Google Chat live, and checks every answer against what it read.</p>
         </div>
         <IndexSummary stats={stats} />
       </header>
@@ -179,9 +172,12 @@ export default function Home() {
 function IndexSummary({ stats }: { stats: IndexStats | null | undefined }) {
   if (stats === undefined) return null;
   if (stats === null) return <p className={styles.indexWarning}>Index unavailable</p>;
-  if (stats.documents === 0) return <p className={styles.indexWarning}>Index is empty: run npm run sync</p>;
+  if (!stats.liveGoogle && stats.documents === 0) {
+    return <p className={styles.indexWarning}>No sources connected: run npm run google-login</p>;
+  }
   return (
-    <ul className={styles.index} aria-label="Indexed sources">
+    <ul className={styles.index} aria-label="Sources">
+      {stats.liveGoogle && <li className={styles.indexItem}>Live: Google Drive · Gmail · Google Chat</li>}
       {stats.sources
         .filter((s) => s.documents > 0)
         .map((s) => (
@@ -215,10 +211,8 @@ function TurnView({ turn }: { turn: Turn }) {
 }
 
 function AnswerView({ answer, turn }: { answer: FinalAnswer; turn: Turn }) {
-  const status = STATUS[answer.status];
   return (
     <article className={styles.answer}>
-      <span className={`${styles.status} ${status.className}`}>{status.label}</span>
       <div className={styles.answerText}>{renderText(answer.text, turn.id)}</div>
 
       {answer.conflicts.length > 0 && (
@@ -233,7 +227,9 @@ function AnswerView({ answer, turn }: { answer: FinalAnswer; turn: Turn }) {
       )}
 
       {answer.citations.length > 0 && (
-        <ol className={styles.sources}>
+        <details className={styles.sourcesDetails}>
+          <summary>Sources ({answer.citations.length})</summary>
+          <ol className={styles.sources}>
           {answer.citations.map((c) => (
             <li key={c.n} id={`cite-${turn.id}-${c.n}`} className={styles.source}>
               <div className={styles.sourceHead}>
@@ -251,7 +247,8 @@ function AnswerView({ answer, turn }: { answer: FinalAnswer; turn: Turn }) {
               <blockquote className={styles.excerpt}>{c.excerpt}</blockquote>
             </li>
           ))}
-        </ol>
+          </ol>
+        </details>
       )}
 
       <details className={styles.checks}>

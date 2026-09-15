@@ -19,6 +19,9 @@ const HTML = "text/html";
 const PLAIN = ["text/plain", "text/markdown", "text/csv"];
 const MAX_BYTES = 20 * 1024 * 1024;
 
+/** File types whose text can be read: Google Docs/Sheets/Slides, PDF, Word, HTML and plain text. */
+export const READABLE_MIME_TYPES = [...Object.keys(EXPORT_AS), PDF, DOCX, HTML, ...PLAIN];
+
 const SHARED_DRIVES = { supportsAllDrives: true, includeItemsFromAllDrives: true, corpora: "allDrives" } as const;
 
 export function driveConfigured(): boolean {
@@ -79,7 +82,7 @@ export async function syncDrive(ctx: SyncContext): Promise<number> {
   return updated;
 }
 
-async function fileText(drive: drive_v3.Drive, fileId: string, mimeType: string): Promise<string> {
+export async function fileText(drive: drive_v3.Drive, fileId: string, mimeType: string): Promise<string> {
   const exportAs = EXPORT_AS[mimeType];
   if (exportAs) {
     const res = await drive.files.export({ fileId, mimeType: exportAs }, { responseType: "text" });

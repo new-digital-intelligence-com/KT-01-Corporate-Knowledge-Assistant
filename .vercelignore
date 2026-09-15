@@ -1,0 +1,7 @@
+# Never upload local secrets, the local database or build output.
+.env*
+!.env.example
+secrets/
+data/
+node_modules/
+.next/

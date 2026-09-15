@@ -241,6 +241,16 @@
 
 /* Sources */
 
+.sourcesDetails summary {
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sourcesDetails[open] summary {
+  margin-bottom: 8px;
+}
+
 .sources {
   display: flex;
   flex-direction: column;

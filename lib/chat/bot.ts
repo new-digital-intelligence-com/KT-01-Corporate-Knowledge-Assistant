@@ -1,6 +1,7 @@
 import { answerQuestion, describeAssistantError } from "../assistant";
 import { envList } from "../config";
 import { getStats } from "../db";
+import { liveGoogleAvailable } from "../live";
 import { clip } from "../text";
 import type { AssistantEvent, FinalAnswer } from "../types";
 import { editMessage, getSpace, msSinceLastWrite, postMessage } from "./client";
@@ -47,7 +48,7 @@ const WELCOME = [
 ].join("\n");
 
 const NOTHING_INDEXED =
-  "I'm set up, but no company sources have been indexed yet, so I can't answer questions. (Admin: run `npm run sync`.)";
+  "I'm set up, but no company sources are connected yet, so I can't answer questions. (Admin: sign in with `npm run google-login`.)";
 
 const EXTERNAL_SPACE =
   "I only answer in spaces without people from outside the company, because my answers come from internal sources. Send me a direct message instead.";
@@ -138,7 +139,7 @@ export async function handleEvent(event: ChatEvent, deliveryId: string, log: Log
       ? EXTERNAL_SPACE
       : !question
         ? "Ask me a question about the company, for example: _How do I submit an expense claim?_"
-        : getStats().documents === 0
+        : !liveGoogleAvailable() && getStats().documents === 0
           ? NOTHING_INDEXED
           : null;
   if (refusal) {
@@ -175,10 +176,10 @@ export async function handleEvent(event: ChatEvent, deliveryId: string, log: Log
       }
       await edits;
 
-      const text = answer ? renderAnswer(answer) : `⚠️ ${plain(failure ?? "Something went wrong. Please ask again.")}`;
+      const reply = answer ? renderAnswer(answer) : `⚠️ ${plain(failure ?? "Something went wrong. Please ask again.")}`;
       if (answer) saveTurn({ conversation, asker, question, answer: answer.text, status: answer.status });
       // If the edit still fails after retries, post the reply as a new message rather than lose it.
-      await editMessage(placeholder, text).catch(() => postMessage(space, text, thread));
+      await editMessage(placeholder, reply).catch(() => postMessage(space, reply, thread));
       finishEvent(eventId);
       log(answer ? `answered (${answer.status}, ${answer.citations.length} source(s))` : `failed: ${failure ?? "unknown error"}`);
     });

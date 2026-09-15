@@ -13,9 +13,14 @@ const STOPWORDS = new Set(
 
 /** Turn free text into an FTS5 query: any keyword matches, prefixes allowed, ranked by BM25. */
 export function toMatchQuery(query: string): string | null {
-  const terms = query.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
-  const useful = [...new Set(terms.filter((t) => t.length > 1 && !STOPWORDS.has(t)))].slice(0, 12);
+  const useful = keywords(query);
   return useful.length ? useful.map((t) => `"${t}"*`).join(" OR ") : null;
+}
+
+/** The distinctive words of a query: lowercased, deduplicated, without filler words. */
+export function keywords(query: string, max = 12): string[] {
+  const terms = query.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  return [...new Set(terms.filter((t) => t.length > 1 && !STOPWORDS.has(t)))].slice(0, max);
 }
 
 export function searchChunks(query: string, sources: Source[] | undefined, limit: number): ChunkRow[] {
