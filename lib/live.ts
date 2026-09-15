@@ -572,12 +572,17 @@ function moment(value: string | undefined, fallback: Date, endOfDay = false): st
 
 let timeZone: Promise<string> | undefined;
 
-/** The signed-in person's calendar time zone, so times are shown the way they see them. */
-function calendarTimeZone(): Promise<string> {
+/**
+ * The time zone every calendar time is shown in: GMT by default, any zone name through
+ * CALENDAR_TIME_ZONE, or "auto" for the signed-in person's own calendar zone.
+ */
+function displayTimeZone(): Promise<string> {
+  const configured = (env("CALENDAR_TIME_ZONE") ?? "GMT").trim();
+  if (configured.toLowerCase() !== "auto") return Promise.resolve(configured);
   timeZone ??= g()
     .calendar.calendars.get({ calendarId: "primary" })
-    .then((res) => res.data.timeZone ?? "UTC")
-    .catch(() => "UTC");
+    .then((res) => res.data.timeZone ?? "GMT")
+    .catch(() => "GMT");
   return timeZone;
 }
 
@@ -609,7 +614,7 @@ export async function searchCalendar(
   const timeMin = moment(start, now);
   const timeMax = moment(end, new Date(Date.parse(timeMin) + TWO_WEEKS_MS), true);
 
-  const zone = await calendarTimeZone();
+  const zone = await displayTimeZone();
   const res = await g().calendar.events.list({
     calendarId: id,
     timeMin,
@@ -677,7 +682,7 @@ export async function checkAvailability(emails: string[], start: string | undefi
   const timeMin = moment(start, new Date());
   const timeMax = moment(end, new Date(Date.parse(timeMin) + 7 * 86_400_000), true);
 
-  const zone = await calendarTimeZone();
+  const zone = await displayTimeZone();
   const res = await g().calendar.freebusy.query({
     requestBody: { timeMin, timeMax, items: people.map((id) => ({ id })) },
   });
