@@ -1,0 +1,81 @@
+:root {
+  --bg: #f6f5f2;
+  --surface: #ffffff;
+  --surface-2: #f1f0ec;
+  --border: #e3e1db;
+  --text: #1d1d1b;
+  --text-soft: #3d3c39;
+  --muted: #6b6a65;
+  --accent: #2f5bd3;
+  --on-accent: #ffffff;
+
+  --ok-fg: #1d6b3a;
+  --ok-bg: #e4f3e9;
+  --warn-fg: #8a5a00;
+  --warn-bg: #fcf0da;
+  --none-fg: #55534e;
+  --none-bg: #ebe9e4;
+  --bad-fg: #b3261e;
+
+  --slack: #611f69;
+  --drive: #1a73e8;
+  --gmail: #c5221f;
+  --gchat: #188038;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #141414;
+    --surface: #1d1d1d;
+    --surface-2: #262626;
+    --border: #333331;
+    --text: #ecebe8;
+    --text-soft: #cfcdc8;
+    --muted: #9c9a94;
+    --accent: #7c9cf5;
+    --on-accent: #0f1320;
+
+    --ok-fg: #7fd39b;
+    --ok-bg: #1b3325;
+    --warn-fg: #f0c060;
+    --warn-bg: #3a2e14;
+    --none-fg: #bdbab3;
+    --none-bg: #2c2b29;
+    --bad-fg: #f28b82;
+
+    --slack: #d9a4e0;
+    --drive: #8ab4f8;
+    --gmail: #f28b82;
+    --gchat: #81c995;
+
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  min-height: 100vh;
+  color: var(--text);
+  background: var(--bg);
+  font-family: system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}

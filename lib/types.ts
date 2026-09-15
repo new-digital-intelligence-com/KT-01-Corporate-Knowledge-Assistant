@@ -1,0 +1,60 @@
+// Shared between the server and the browser, so nothing here may import server-only modules.
+
+export const SOURCES = ["slack", "drive", "gmail", "gchat"] as const;
+export type Source = (typeof SOURCES)[number];
+
+export const SOURCE_LABELS: Record<Source, string> = {
+  slack: "Slack",
+  drive: "Google Drive",
+  gmail: "Gmail",
+  gchat: "Google Chat",
+};
+
+export interface Citation {
+  n: number;
+  chunkId: number;
+  source: Source;
+  title: string;
+  url: string | null;
+  container: string;
+  author: string | null;
+  updatedAt: string;
+  excerpt: string;
+}
+
+export type Verdict = "supported" | "partial" | "unsupported";
+
+export interface ClaimCheck {
+  claim: string;
+  verdict: Verdict;
+  note: string;
+}
+
+export type AnswerStatus = "verified" | "partially_verified" | "not_found";
+
+export interface FinalAnswer {
+  /** Answer text with citation markers rewritten to [1], [2], … */
+  text: string;
+  status: AnswerStatus;
+  citations: Citation[];
+  checks: ClaimCheck[];
+  conflicts: string[];
+  /** True when the first draft failed the check and was rewritten. */
+  rewritten: boolean;
+}
+
+export type AssistantEvent =
+  | { type: "progress"; message: string }
+  | { type: "answer"; answer: FinalAnswer }
+  | { type: "error"; message: string };
+
+export interface HistoryTurn {
+  question: string;
+  answer: string;
+}
+
+export interface IndexStats {
+  sources: { source: Source; documents: number; newest: string | null; lastSync: string | null }[];
+  documents: number;
+  chunks: number;
+}
