@@ -1,9 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
-import { model } from "./config";
+import { env, model } from "./config";
 import { getChunks, getDocumentChunks, getStats, type ChunkRow } from "./db";
 import {
+  keyDocumentConfigured,
   listAdminRoles,
   listGroupMembers,
   liveGoogleAvailable,
@@ -11,6 +12,7 @@ import {
   readSpaceMessages,
   searchChat,
   searchDrive,
+  searchKeyDocument,
   searchGmail,
   searchGroups,
   searchPeople,
@@ -188,6 +190,40 @@ const LIST_GROUP_MEMBERS: Anthropic.Beta.BetaTool = {
   },
 };
 
+const AI_CATALOG: Anthropic.Beta.BetaTool = {
+  name: "ai_employee_catalog",
+  description:
+    "The NDI AI Employee Catalog (the PowerPoint in Cross AI Employees), the source of truth for what each AI employee " +
+    "is: code, name, category, purpose, capabilities and integrations. Pass an AI employee's code (e.g. 'GP-01'), name " +
+    "or a topic to get the matching slides; leave the query empty for the list of slides.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "e.g. 'GP-01' or 'onboarding'" },
+      limit: { type: "integer", minimum: 1, maximum: 12, description: "Maximum slides (default 6)" },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+};
+
+const AI_TRACKER: Anthropic.Beta.BetaTool = {
+  name: "ai_employee_tracker",
+  description:
+    "The AI Employee PoC Creation Tracker spreadsheet, across all its tabs: the current progress of each AI employee, " +
+    "such as who it's assigned to, its status and dates. Pass an AI employee's code (e.g. 'GP-01'), a person or a status " +
+    "to get the matching rows; leave the query empty to get every row.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "e.g. 'GP-01', 'Oleg' or 'in progress'" },
+      limit: { type: "integer", minimum: 1, maximum: 12, description: "Maximum rows (default 6)" },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+};
+
 const LIST_ADMIN_ROLES: Anthropic.Beta.BetaTool = {
   name: "list_admin_roles",
   description:
@@ -221,6 +257,8 @@ const SEARCH_YOUTUBE: Anthropic.Beta.BetaTool = {
 function availableTools(context: AskContext): Anthropic.Beta.BetaTool[] {
   const tools: Anthropic.Beta.BetaTool[] = [];
   if (liveGoogleAvailable()) tools.push(SEARCH_DRIVE, SEARCH_GMAIL, SEARCH_CHAT, SEARCH_PEOPLE, SEARCH_GROUPS, LIST_GROUP_MEMBERS, LIST_ADMIN_ROLES);
+  if (keyDocumentConfigured("catalog")) tools.push(AI_CATALOG);
+  if (keyDocumentConfigured("tracker")) tools.push(AI_TRACKER);
   if (youtubeConfigured()) tools.push(SEARCH_YOUTUBE);
   if (liveGoogleAvailable() && context.space) tools.push(READ_SPACE);
   if (getStats().documents > 0) tools.push(SEARCH_INDEX);
@@ -235,6 +273,10 @@ function answerSystemPrompt(context: AskContext): string {
       ? "This question was asked in a direct message with you."
       : "";
   const who = context.asker ? ` It was asked by ${context.asker}.` : "";
+  const keyDocuments =
+    env("AI_CATALOG_FILE_ID") || env("AI_TRACKER_FILE_ID")
+      ? "\n- For anything about NDI's AI employees, check the two key documents first: ai_employee_catalog is the source of truth for what each AI employee is, and ai_employee_tracker holds its current progress (assignee, status, dates). If other documents disagree, the catalog wins on what an AI employee is and the tracker wins on progress; mention the difference."
+      : "";
 
   return `You are Claude, the AI assistant of our company, working inside Google Chat. You are a capable general assistant: you explain, reason, give honest opinions and recommendations, draft and edit text, brainstorm and use your general knowledge. You also have live, read-only access to the company's Google Drive, Gmail, Google Chat, Google Workspace directory (people, groups and admin roles) and YouTube channel through your tools. Anyone in the company can ask you anything.
 
@@ -242,7 +284,7 @@ Today's date is ${new Date().toISOString().slice(0, 10)}. ${where}${who}
 
 How to work:
 - Decide whether the question involves the company: its AI employees, projects, clients, people, teams, groups, documents, decisions or anything that happened internally. If it does, search the company sources before answering, even when you think you know: short keyword queries in the sources that fit, then open the most relevant results with read_result and base company facts on what you read.
-- Words like "this", "here", "this AI employee" or "this project" usually refer to the topic of the space you were asked in. Use the space name, and read its recent messages when that helps.
+- Words like "this", "here", "this AI employee" or "this project" usually refer to the topic of the space you were asked in. Use the space name, and read its recent messages when that helps.${keyDocuments}
 - If the question doesn't need company information (general knowledge, how-to, writing, brainstorming, opinions on a general topic), answer directly without searching.
 - Cite company facts: put markers like [#123] right after each sentence that states something about the company, using ids from tool results, and only ids a tool returned in this conversation. Your own reasoning, opinions, general knowledge and suggestions don't get markers.
 - Never present guesses about the company as facts. If the sources don't cover something company-specific, say so plainly, then still help as far as you can and make clear which part is your own view.
@@ -408,6 +450,19 @@ async function runTool(
           content: hits.length
             ? hits.map((hit) => formatPassage(hit, 1500)).join("\n\n")
             : "No passages matched. Try other keywords, synonyms or another language.",
+        };
+      }
+
+      case "ai_employee_catalog":
+      case "ai_employee_tracker": {
+        const kind = call.name === "ai_employee_catalog" ? "catalog" : "tracker";
+        const max = typeof input.limit === "number" ? Math.min(Math.max(Math.round(input.limit), 1), 12) : 6;
+        const rows = (await searchKeyDocument(kind, query, max)).map(research.add);
+        emit({ type: "progress", message: `Checked the AI employee ${kind} for “${query || "everything"}”: ${rows.length} match(es)` });
+        return {
+          content: rows.length
+            ? rows.map((row) => formatPassage(row, 12_000)).join("\n\n")
+            : `Nothing in the ${kind} matched “${query}”. Try the AI employee's code, name or another keyword.`,
         };
       }
 

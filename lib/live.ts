@@ -3,6 +3,7 @@ import { env } from "./config";
 import type { ChunkRow } from "./db";
 import { keywords } from "./search";
 import { READABLE_MIME_TYPES, fileText } from "./sources/drive";
+import { pptxSlides, sheetRecords, xlsxSheets } from "./sources/office";
 import { bodyText, header, messageDate, stripQuoted } from "./sources/gmail";
 import { GOOGLE_SCOPES, directoryNames, googleAuth, userAuthConfigured } from "./sources/google";
 import { chunkText, clip, htmlToText } from "./text";
@@ -532,6 +533,97 @@ function readableDuration(iso: string): string {
   return hours ? `${hours}:${mmss}` : mmss;
 }
 
+// ─── Key AI employee documents: the catalog and the tracker ──────────────
+
+export type KeyDocumentKind = "catalog" | "tracker";
+
+const KEY_DOCUMENTS: Record<KeyDocumentKind, { setting: string; label: string }> = {
+  catalog: { setting: "AI_CATALOG_FILE_ID", label: "AI Employee Catalog" },
+  tracker: { setting: "AI_TRACKER_FILE_ID", label: "AI Employee Tracker" },
+};
+
+interface KeyDocument {
+  modified: string;
+  title: string;
+  url: string | null;
+  /** Slides of a presentation, or one record per spreadsheet row. */
+  parts: string[];
+}
+
+const keyDocuments = new Map<string, KeyDocument>();
+
+export function keyDocumentConfigured(kind: KeyDocumentKind): boolean {
+  return liveGoogleAvailable() && Boolean(env(KEY_DOCUMENTS[kind].setting));
+}
+
+/** Loads a key document, and loads it again only when Drive says it has changed. */
+async function keyDocument(fileId: string): Promise<KeyDocument> {
+  const meta = (
+    await g().drive.files.get({ fileId, fields: "name, mimeType, webViewLink, modifiedTime, size", supportsAllDrives: true })
+  ).data;
+  const cached = keyDocuments.get(fileId);
+  if (cached && cached.modified === meta.modifiedTime) return cached;
+  if (Number(meta.size ?? 0) > MAX_FILE_BYTES) throw new Error(`${meta.name} is larger than 20 MB`);
+
+  let parts: string[];
+  if (meta.mimeType === "application/vnd.openxmlformats-officedocument.presentationml.presentation") {
+    const res = await g().drive.files.get({ fileId, alt: "media", supportsAllDrives: true }, { responseType: "arraybuffer" });
+    parts = (await pptxSlides(new Uint8Array(res.data as unknown as ArrayBuffer))).map((text, i) => `Slide ${i + 1}:\n${text}`);
+  } else if (meta.mimeType === "application/vnd.google-apps.spreadsheet") {
+    const res = await g().drive.files.export(
+      { fileId, mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
+      { responseType: "arraybuffer" },
+    );
+    parts = (await xlsxSheets(new Uint8Array(res.data as unknown as ArrayBuffer))).flatMap(sheetRecords);
+  } else if (meta.mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") {
+    const res = await g().drive.files.get({ fileId, alt: "media", supportsAllDrives: true }, { responseType: "arraybuffer" });
+    parts = (await xlsxSheets(new Uint8Array(res.data as unknown as ArrayBuffer))).flatMap(sheetRecords);
+  } else {
+    parts = chunkText(await fileText(g().drive, fileId, meta.mimeType ?? ""));
+  }
+
+  const loaded = { modified: meta.modifiedTime ?? "", title: meta.name ?? fileId, url: meta.webViewLink ?? null, parts };
+  keyDocuments.set(fileId, loaded);
+  return loaded;
+}
+
+/**
+ * The slides (catalog) or rows (tracker) that match the query. An exact phrase such as "GP-01" counts far
+ * more than loose words. With no query: the list of slides, or every row.
+ */
+export async function searchKeyDocument(kind: KeyDocumentKind, query: string, limit: number): Promise<Found[]> {
+  const { setting, label } = KEY_DOCUMENTS[kind];
+  const fileId = env(setting);
+  if (!fileId) throw new Error(`${setting} is not set`);
+  const doc = await keyDocument(fileId);
+  const base: Found = { docId: `key:${kind}:${fileId}`, source: "drive", title: doc.title, url: doc.url, container: label, author: null, updatedAt: doc.modified, text: "" };
+
+  const phrase = query.trim().toLowerCase();
+  const words = keywords(query, 8);
+  if (!words.length) {
+    const overview =
+      kind === "catalog"
+        ? `${doc.parts.length} slides:\n${doc.parts.map((part, i) => `${i + 1}. ${part.split("\n")[1] ?? ""}`).join("\n")}`
+        : doc.parts.join("\n");
+    return pieces(base, overview);
+  }
+
+  const matches = doc.parts
+    .map((text, index) => {
+      const lower = text.normalize("NFKC").toLowerCase();
+      return { index, exact: lower.includes(phrase), score: words.filter((w) => lower.includes(w)).length };
+    })
+    .filter((match) => match.exact || match.score > 0);
+  // When the exact phrase appears somewhere (like a code "GP-01"), loose word matches ("gp", "01") are noise.
+  const chosen = matches.some((match) => match.exact) ? matches.filter((match) => match.exact) : matches;
+
+  return chosen
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, limit)
+    .sort((a, b) => a.index - b.index)
+    .map((match) => ({ ...base, text: clip(doc.parts[match.index], 12_000) }));
+}
+
 // ─── Reading a result ────────────────────────────────────────────────────
 
 /** Opens a live search result in full: the Drive file, the email thread or the Chat thread. */
@@ -540,7 +632,9 @@ export function readLive(item: Found): Promise<Found[]> {
   if (item.docId.startsWith("gmail:")) return readGmail(item);
   if (item.docId.startsWith("gchat:")) return readChat(item);
   // Directory and YouTube results are already complete.
-  if (item.docId.startsWith("directory:") || item.docId.startsWith("youtube:")) return Promise.resolve([item]);
+  if (item.docId.startsWith("directory:") || item.docId.startsWith("youtube:") || item.docId.startsWith("key:")) {
+    return Promise.resolve([item]);
+  }
   if (item.docId.startsWith("gspace:")) return readSpaceMessages(item.docId.slice("gspace:".length), item.container);
   return Promise.reject(new Error("this result can't be opened"));
 }

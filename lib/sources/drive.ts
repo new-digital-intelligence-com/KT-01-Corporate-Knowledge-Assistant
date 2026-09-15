@@ -5,14 +5,18 @@ import { env, envList } from "../config";
 import { upsertDocument } from "../db";
 import { errorMessage, htmlToText } from "../text";
 import { GOOGLE_SCOPES, googleAuth, googleConfigured, userAuthConfigured } from "./google";
+import { pptxSlides, spreadsheetText, xlsxSheets } from "./office";
 import type { SyncContext } from "./types";
 
 const FOLDER = "application/vnd.google-apps.folder";
 const EXPORT_AS: Record<string, string> = {
   "application/vnd.google-apps.document": "text/plain",
   "application/vnd.google-apps.presentation": "text/plain",
-  "application/vnd.google-apps.spreadsheet": "text/csv",
 };
+// Google Sheets are exported as .xlsx, because a CSV export only contains the first tab.
+const GOOGLE_SHEET = "application/vnd.google-apps.spreadsheet";
+const PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+const XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const PDF = "application/pdf";
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const HTML = "text/html";
@@ -20,7 +24,7 @@ const PLAIN = ["text/plain", "text/markdown", "text/csv"];
 const MAX_BYTES = 20 * 1024 * 1024;
 
 /** File types whose text can be read: Google Docs/Sheets/Slides, PDF, Word, HTML and plain text. */
-export const READABLE_MIME_TYPES = [...Object.keys(EXPORT_AS), PDF, DOCX, HTML, ...PLAIN];
+export const READABLE_MIME_TYPES = [...Object.keys(EXPORT_AS), GOOGLE_SHEET, PDF, DOCX, PPTX, XLSX, HTML, ...PLAIN];
 
 const SHARED_DRIVES = { supportsAllDrives: true, includeItemsFromAllDrives: true, corpora: "allDrives" } as const;
 
@@ -31,7 +35,7 @@ export function driveConfigured(): boolean {
 export async function syncDrive(ctx: SyncContext): Promise<number> {
   const drive = google.drive({ version: "v3", auth: googleAuth(env("GOOGLE_DRIVE_USER"), GOOGLE_SCOPES.drive) });
 
-  const types = [...Object.keys(EXPORT_AS), PDF, DOCX, HTML, ...PLAIN].map((m) => `mimeType = '${m}'`).join(" or ");
+  const types = READABLE_MIME_TYPES.map((m) => `mimeType = '${m}'`).join(" or ");
   const base = `trashed = false and modifiedTime > '${ctx.since.toISOString()}' and (${types})`;
   const roots = envList("GOOGLE_DRIVE_FOLDER_IDS");
   const queries = roots.length
@@ -88,11 +92,17 @@ export async function fileText(drive: drive_v3.Drive, fileId: string, mimeType: 
     const res = await drive.files.export({ fileId, mimeType: exportAs }, { responseType: "text" });
     return String(res.data);
   }
+  if (mimeType === GOOGLE_SHEET) {
+    const res = await drive.files.export({ fileId, mimeType: XLSX }, { responseType: "arraybuffer" });
+    return spreadsheetText(await xlsxSheets(new Uint8Array(res.data as unknown as ArrayBuffer)));
+  }
 
   const res = await drive.files.get({ fileId, alt: "media", supportsAllDrives: true }, { responseType: "arraybuffer" });
   const bytes = new Uint8Array(res.data as unknown as ArrayBuffer);
   if (mimeType === PDF) return (await extractText(bytes, { mergePages: true })).text;
   if (mimeType === DOCX) return (await mammoth.extractRawText({ buffer: Buffer.from(bytes) })).value;
+  if (mimeType === PPTX) return (await pptxSlides(bytes)).map((text, i) => `Slide ${i + 1}:\n${text}`).join("\n\n");
+  if (mimeType === XLSX) return spreadsheetText(await xlsxSheets(bytes));
   const text = new TextDecoder().decode(bytes);
   return mimeType === HTML ? htmlToText(text) : text;
 }
