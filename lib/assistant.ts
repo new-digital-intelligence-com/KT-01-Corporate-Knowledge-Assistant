@@ -3,7 +3,21 @@ import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import { model } from "./config";
 import { getChunks, getDocumentChunks, getStats, type ChunkRow } from "./db";
-import { liveGoogleAvailable, readLive, readSpaceMessages, searchChat, searchDrive, searchGmail, type Found } from "./live";
+import {
+  listAdminRoles,
+  listGroupMembers,
+  liveGoogleAvailable,
+  readLive,
+  readSpaceMessages,
+  searchChat,
+  searchDrive,
+  searchGmail,
+  searchGroups,
+  searchPeople,
+  searchYouTube,
+  youtubeConfigured,
+  type Found,
+} from "./live";
 import { searchChunks } from "./search";
 import { clip, errorMessage } from "./text";
 import {
@@ -127,9 +141,87 @@ const READ_SPACE: Anthropic.Beta.BetaTool = {
   input_schema: { type: "object", properties: {}, additionalProperties: false },
 };
 
+const SEARCH_PEOPLE: Anthropic.Beta.BetaTool = {
+  name: "search_people",
+  description:
+    "Look up people in the company's Google Workspace directory (read-only): name, email, title, department, manager, " +
+    "phone, organizational unit and account status. The query is a name, an email, or directory search syntax such as " +
+    "\"name:'Jane Smith'\", \"email:jane*\", \"orgDepartment='Sales'\", \"orgTitle:'Engineer'\" or \"isSuspended=false\". " +
+    "Leave the query empty to list people.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "A name, an email, or directory search syntax" },
+      limit: { type: "integer", minimum: 1, maximum: 50, description: "Maximum people (default 6)" },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+};
+
+const SEARCH_GROUPS: Anthropic.Beta.BetaTool = {
+  name: "search_groups",
+  description:
+    "Find Google Workspace groups (read-only) with their email, description and member count. Either search with " +
+    "directory syntax like \"name:'Sales*'\" or \"email:team*\" (leave both fields empty to list all groups), or pass " +
+    "member_email to get the groups one person belongs to.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Directory search syntax, e.g. \"email:sales*\"" },
+      member_email: { type: "string", description: "A person's email, to list the groups they belong to" },
+      limit: { type: "integer", minimum: 1, maximum: 50, description: "Maximum groups (default 6)" },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+};
+
+const LIST_GROUP_MEMBERS: Anthropic.Beta.BetaTool = {
+  name: "list_group_members",
+  description: "List the members of a Google Workspace group (read-only), with each member's role: owner, manager or member.",
+  input_schema: {
+    type: "object",
+    properties: { group_email: { type: "string", description: "The group's email address" } },
+    required: ["group_email"],
+    additionalProperties: false,
+  },
+};
+
+const LIST_ADMIN_ROLES: Anthropic.Beta.BetaTool = {
+  name: "list_admin_roles",
+  description:
+    "List Google Workspace Admin console role assignments (read-only), such as Super Admin or User Management Admin, " +
+    "for everyone or for one person. This can fail if the signed-in account isn't allowed to view roles; say so if it does.",
+  input_schema: {
+    type: "object",
+    properties: { user_email: { type: "string", description: "Optional: only this person's roles" } },
+    required: [],
+    additionalProperties: false,
+  },
+};
+
+const SEARCH_YOUTUBE: Anthropic.Beta.BetaTool = {
+  name: "search_youtube",
+  description:
+    "Search the company's YouTube channel (read-only) by keywords in video titles and descriptions; leave the query " +
+    "empty to get the latest videos. Returns each video's title, link, publish date, duration, visibility, views, likes, " +
+    "tags and full description.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Keywords, e.g. 'front office assistant demo'" },
+      limit: { type: "integer", minimum: 1, maximum: 20, description: "Maximum videos (default 6)" },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+};
+
 function availableTools(context: AskContext): Anthropic.Beta.BetaTool[] {
   const tools: Anthropic.Beta.BetaTool[] = [];
-  if (liveGoogleAvailable()) tools.push(SEARCH_DRIVE, SEARCH_GMAIL, SEARCH_CHAT);
+  if (liveGoogleAvailable()) tools.push(SEARCH_DRIVE, SEARCH_GMAIL, SEARCH_CHAT, SEARCH_PEOPLE, SEARCH_GROUPS, LIST_GROUP_MEMBERS, LIST_ADMIN_ROLES);
+  if (youtubeConfigured()) tools.push(SEARCH_YOUTUBE);
   if (liveGoogleAvailable() && context.space) tools.push(READ_SPACE);
   if (getStats().documents > 0) tools.push(SEARCH_INDEX);
   tools.push(READ_RESULT);
@@ -144,12 +236,12 @@ function answerSystemPrompt(context: AskContext): string {
       : "";
   const who = context.asker ? ` It was asked by ${context.asker}.` : "";
 
-  return `You are Claude, the AI assistant of our company, working inside Google Chat. You are a capable general assistant: you explain, reason, give honest opinions and recommendations, draft and edit text, brainstorm and use your general knowledge. You also have live access to the company's Google Drive, Gmail and Google Chat through your tools. Anyone in the company can ask you anything.
+  return `You are Claude, the AI assistant of our company, working inside Google Chat. You are a capable general assistant: you explain, reason, give honest opinions and recommendations, draft and edit text, brainstorm and use your general knowledge. You also have live, read-only access to the company's Google Drive, Gmail, Google Chat, Google Workspace directory (people, groups and admin roles) and YouTube channel through your tools. Anyone in the company can ask you anything.
 
 Today's date is ${new Date().toISOString().slice(0, 10)}. ${where}${who}
 
 How to work:
-- Decide whether the question involves the company: its AI employees, projects, clients, people, documents, decisions or anything that happened internally. If it does, search the company sources before answering, even when you think you know: short keyword queries in the sources that fit, then open the most relevant results with read_result and base company facts on what you read.
+- Decide whether the question involves the company: its AI employees, projects, clients, people, teams, groups, documents, decisions or anything that happened internally. If it does, search the company sources before answering, even when you think you know: short keyword queries in the sources that fit, then open the most relevant results with read_result and base company facts on what you read.
 - Words like "this", "here", "this AI employee" or "this project" usually refer to the topic of the space you were asked in. Use the space name, and read its recent messages when that helps.
 - If the question doesn't need company information (general knowledge, how-to, writing, brainstorming, opinions on a general topic), answer directly without searching.
 - Cite company facts: put markers like [#123] right after each sentence that states something about the company, using ids from tool results, and only ids a tool returned in this conversation. Your own reasoning, opinions, general knowledge and suggestions don't get markers.
@@ -317,6 +409,32 @@ async function runTool(
             ? hits.map((hit) => formatPassage(hit, 1500)).join("\n\n")
             : "No passages matched. Try other keywords, synonyms or another language.",
         };
+      }
+
+      case "list_admin_roles": {
+        const person = typeof input.user_email === "string" ? input.user_email.trim() : "";
+        emit({ type: "progress", message: person ? `Checking admin roles of ${person}` : "Checking admin role assignments" });
+        const rows = (await listAdminRoles(person || undefined)).map(research.add);
+        return { content: rows.map((row) => formatPassage(row, 6000)).join("\n\n") };
+      }
+
+      case "search_youtube":
+        return listFound("YouTube", query || "latest videos", await searchYouTube(query, Math.min(limit, 20)), research, emit);
+
+      case "search_people":
+        return listFound("the Workspace directory", query || "everyone", await searchPeople(query, limit), research, emit);
+
+      case "search_groups": {
+        const member = typeof input.member_email === "string" ? input.member_email.trim() : "";
+        const found = await searchGroups(query, limit, member || undefined);
+        return listFound("Workspace groups", member ? `groups of ${member}` : query || "all groups", found, research, emit);
+      }
+
+      case "list_group_members": {
+        const group = typeof input.group_email === "string" ? input.group_email.trim() : "";
+        emit({ type: "progress", message: `Listing members of ${group}` });
+        const rows = (await listGroupMembers(group)).map(research.add);
+        return { content: rows.length ? rows.map((row) => formatPassage(row, 6000)).join("\n\n") : `No members found for ${group}.` };
       }
 
       case "read_space_messages": {

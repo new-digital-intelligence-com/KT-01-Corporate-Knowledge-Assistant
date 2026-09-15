@@ -1,4 +1,4 @@
-import { google, type chat_v1, type drive_v3, type gmail_v1 } from "googleapis";
+import { google, type admin_directory_v1, type chat_v1, type drive_v3, type gmail_v1, type youtube_v3 } from "googleapis";
 import { env } from "./config";
 import type { ChunkRow } from "./db";
 import { keywords } from "./search";
@@ -22,13 +22,23 @@ export function liveGoogleAvailable(): boolean {
   return userAuthConfigured();
 }
 
-let clients: { drive: drive_v3.Drive; gmail: gmail_v1.Gmail; chat: chat_v1.Chat } | undefined;
+let clients:
+  | {
+      drive: drive_v3.Drive;
+      gmail: gmail_v1.Gmail;
+      chat: chat_v1.Chat;
+      admin: admin_directory_v1.Admin;
+      youtube: youtube_v3.Youtube;
+    }
+  | undefined;
 
 function g() {
   clients ??= {
     drive: google.drive({ version: "v3", auth: googleAuth(undefined, GOOGLE_SCOPES.drive) }),
     gmail: google.gmail({ version: "v1", auth: googleAuth(undefined, GOOGLE_SCOPES.gmail) }),
     chat: google.chat({ version: "v1", auth: googleAuth(undefined, GOOGLE_SCOPES.chat) }),
+    admin: google.admin({ version: "directory_v1", auth: googleAuth(undefined, GOOGLE_SCOPES.directory) }),
+    youtube: google.youtube({ version: "v3", auth: googleAuth(undefined, GOOGLE_SCOPES.youtube) }),
   };
   return clients;
 }
@@ -253,6 +263,275 @@ export async function readSpaceMessages(space: string, label?: string, limit = 4
   );
 }
 
+// ─── Google Workspace directory (read-only) ──────────────────────────────
+
+type ViewType = "admin_view" | "domain_public";
+// Admins see full profiles; everyone else only the public ones. Remember which one this sign-in gets.
+let userView: ViewType | undefined;
+
+function httpStatus(err: unknown): number | undefined {
+  const e = err as { status?: number; response?: { status?: number } };
+  return e.response?.status ?? e.status;
+}
+
+/** People in the directory, by name, email or directory search syntax. */
+export async function searchPeople(query: string, limit: number): Promise<Found[]> {
+  const q = query.trim();
+  const list = (viewType: ViewType) =>
+    g().admin.users.list({
+      customer: "my_customer",
+      viewType,
+      projection: "full",
+      maxResults: Math.min(Math.max(limit, 1), 50),
+      ...(q ? { query: q } : {}),
+    });
+
+  let res: Awaited<ReturnType<typeof list>> | undefined;
+  if (userView !== "domain_public") {
+    try {
+      res = await list("admin_view");
+      userView = "admin_view";
+    } catch (err) {
+      if (httpStatus(err) !== 403) throw err;
+      userView = "domain_public";
+    }
+  }
+  res ??= await list("domain_public");
+  return (res.data.users ?? []).map(personFound);
+}
+
+function personFound(u: admin_directory_v1.Schema$User): Found {
+  const orgs = (u.organizations ?? []) as { title?: string; department?: string; primary?: boolean }[];
+  const org = orgs.find((o) => o.primary) ?? orgs[0];
+  const manager = ((u.relations ?? []) as { type?: string; value?: string }[]).find((r) => r.type === "manager")?.value;
+  const phone = ((u.phones ?? []) as { value?: string }[]).find((p) => p.value)?.value;
+  const lastLogin = u.lastLoginTime?.startsWith("1970") ? "never" : u.lastLoginTime?.slice(0, 10);
+  const lines = [
+    `Name: ${u.name?.fullName ?? ""}`,
+    `Email: ${u.primaryEmail ?? ""}`,
+    org?.title && `Title: ${org.title}`,
+    org?.department && `Department: ${org.department}`,
+    manager && `Manager: ${manager}`,
+    phone && `Phone: ${phone}`,
+    u.orgUnitPath && `Organizational unit: ${u.orgUnitPath}`,
+    u.aliases?.length && `Aliases: ${u.aliases.join(", ")}`,
+    typeof u.isAdmin === "boolean" && `Super admin: ${u.isAdmin ? "yes" : "no"}`,
+    typeof u.isDelegatedAdmin === "boolean" && `Delegated admin (has an Admin console role): ${u.isDelegatedAdmin ? "yes" : "no"}`,
+    typeof u.suspended === "boolean" && `Suspended: ${u.suspended ? "yes" : "no"}`,
+    lastLogin && `Last sign-in: ${lastLogin}`,
+    u.creationTime && `Account created: ${u.creationTime.slice(0, 10)}`,
+  ].filter(Boolean);
+  return {
+    docId: `directory:user:${u.id}`,
+    source: "directory",
+    title: `${u.name?.fullName || u.primaryEmail} (${u.primaryEmail})`,
+    url: u.id ? `https://admin.google.com/ac/users/${u.id}` : null,
+    container: "Workspace users",
+    author: null,
+    updatedAt: "",
+    text: lines.join("\n"),
+  };
+}
+
+/** Admin console role assignments, for everyone or one person. Needs an admin role that can view roles. */
+export async function listAdminRoles(userEmail?: string): Promise<Found[]> {
+  const [roles, assignments] = await Promise.all([
+    g().admin.roles.list({ customer: "my_customer", maxResults: 100 }),
+    g().admin.roleAssignments.list({ customer: "my_customer", maxResults: 200, ...(userEmail ? { userKey: userEmail } : {}) }),
+  ]);
+  const roleName = new Map((roles.data.items ?? []).map((role) => [String(role.roleId), role.roleName ?? String(role.roleId)]));
+  const items = assignments.data.items ?? [];
+  const lines = await Promise.all(
+    items.map(async (a) => {
+      const who = a.assignedTo ? await nameOf(`users/${a.assignedTo}`) : "unknown";
+      const where = a.scopeType === "ORG_UNIT" ? ` (organizational unit ${a.orgUnitId})` : "";
+      return `- ${who}: ${roleName.get(String(a.roleId)) ?? a.roleId}${where}`;
+    }),
+  );
+  return pieces(
+    {
+      docId: `directory:roles:${userEmail ?? "all"}`,
+      source: "directory",
+      title: userEmail ? `Admin roles of ${userEmail}` : "Admin role assignments",
+      url: "https://admin.google.com/ac/roles",
+      container: "Workspace admin roles",
+      author: null,
+      updatedAt: "",
+      text: "",
+    },
+    items.length
+      ? `${items.length} admin role assignment(s)${userEmail ? ` for ${userEmail}` : ""}:\n${lines.join("\n")}`
+      : `No admin role assignments${userEmail ? ` for ${userEmail}` : ""}.`,
+  );
+}
+
+function groupUrl(email: string | null | undefined): string | null {
+  const [local, domain] = (email ?? "").split("@");
+  return local && domain ? `https://groups.google.com/a/${domain}/g/${local}` : null;
+}
+
+/** Groups matching a directory query, or the groups a person belongs to. */
+export async function searchGroups(query: string, limit: number, memberEmail?: string): Promise<Found[]> {
+  const q = query.trim();
+  const res = await g().admin.groups.list(
+    memberEmail
+      ? { userKey: memberEmail, maxResults: 200 }
+      : { customer: "my_customer", maxResults: Math.min(Math.max(limit, 1), 50), ...(q ? { query: q } : {}) },
+  );
+  return (res.data.groups ?? []).map((group) => ({
+    docId: `directory:group:${group.id}`,
+    source: "directory" as const,
+    title: `${group.name || group.email} (${group.email})`,
+    url: groupUrl(group.email),
+    container: "Workspace groups",
+    author: null,
+    updatedAt: "",
+    text: [
+      `Group: ${group.name ?? ""}`,
+      `Email: ${group.email ?? ""}`,
+      group.description && `Description: ${group.description}`,
+      group.directMembersCount && `Direct members: ${group.directMembersCount}`,
+      group.aliases?.length && `Aliases: ${group.aliases.join(", ")}`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  }));
+}
+
+/** Everyone in a group, with their role. */
+export async function listGroupMembers(groupEmail: string): Promise<Found[]> {
+  if (!groupEmail.trim()) return [];
+  const members: admin_directory_v1.Schema$Member[] = [];
+  let pageToken: string | undefined;
+  do {
+    const res = await g().admin.members.list({ groupKey: groupEmail.trim(), maxResults: 200, pageToken });
+    members.push(...(res.data.members ?? []));
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken && members.length < 1000);
+
+  const lines = members.map((m) => {
+    const details = [(m.role ?? "MEMBER").toLowerCase(), m.type && m.type !== "USER" ? m.type.toLowerCase() : null, m.status && m.status !== "ACTIVE" ? m.status.toLowerCase() : null];
+    return `- ${m.email ?? m.id} (${details.filter(Boolean).join(", ")})`;
+  });
+  return pieces(
+    {
+      docId: `directory:members:${groupEmail}`,
+      source: "directory",
+      title: `Members of ${groupEmail}`,
+      url: groupUrl(groupEmail),
+      container: "Workspace groups",
+      author: null,
+      updatedAt: "",
+      text: "",
+    },
+    `${members.length} member(s) of ${groupEmail}:\n${lines.join("\n")}`,
+  );
+}
+
+// ─── YouTube channel (read-only) ─────────────────────────────────────────
+
+// Listing uploads costs 1 quota unit per page, where YouTube's own search costs 100, so recent
+// uploads are fetched once in a while and matched here.
+const UPLOADS_TO_SCAN = 250;
+const UPLOADS_FRESH_MS = 10 * 60_000;
+
+let channel: Promise<{ id: string; title: string; uploads: string }> | undefined;
+let uploadsCache: { at: number; items: youtube_v3.Schema$PlaylistItem[] } | undefined;
+
+export function youtubeConfigured(): boolean {
+  return liveGoogleAvailable() && Boolean(env("YOUTUBE_CHANNEL"));
+}
+
+function youtubeChannel() {
+  channel ??= (async () => {
+    const ref = env("YOUTUBE_CHANNEL") ?? "";
+    const res = await g().youtube.channels.list({
+      part: ["snippet", "contentDetails"],
+      ...(/^UC[\w-]{20,}$/.test(ref) ? { id: [ref] } : { forHandle: ref.startsWith("@") ? ref : `@${ref}` }),
+    });
+    const found = res.data.items?.[0];
+    const uploads = found?.contentDetails?.relatedPlaylists?.uploads;
+    if (!found?.id || !uploads) throw new Error(`the YouTube channel ${ref} wasn't found`);
+    return { id: found.id, title: found.snippet?.title ?? ref, uploads };
+  })().catch((err) => {
+    channel = undefined;
+    throw err;
+  });
+  return channel;
+}
+
+async function recentUploads(): Promise<youtube_v3.Schema$PlaylistItem[]> {
+  if (uploadsCache && Date.now() - uploadsCache.at < UPLOADS_FRESH_MS) return uploadsCache.items;
+  const { uploads } = await youtubeChannel();
+  const items: youtube_v3.Schema$PlaylistItem[] = [];
+  let pageToken: string | undefined;
+  do {
+    const res = await g().youtube.playlistItems.list({ part: ["snippet"], playlistId: uploads, maxResults: 50, pageToken });
+    items.push(...(res.data.items ?? []));
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken && items.length < UPLOADS_TO_SCAN);
+  uploadsCache = { at: Date.now(), items };
+  return items;
+}
+
+/** Channel videos whose title or description contains the keywords; the latest videos when there are none. */
+export async function searchYouTube(query: string, limit: number): Promise<Found[]> {
+  const words = keywords(query, 6);
+  const [items, { title: channelTitle }] = await Promise.all([recentUploads(), youtubeChannel()]);
+  const ids = items
+    .map((item) => {
+      const text = `${item.snippet?.title ?? ""} ${item.snippet?.description ?? ""}`.normalize("NFKC").toLowerCase();
+      return { id: item.snippet?.resourceId?.videoId, score: words.length ? words.filter((w) => text.includes(w)).length : 1 };
+    })
+    .filter((match): match is { id: string; score: number } => Boolean(match.id) && match.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((match) => match.id);
+  if (!ids.length) return [];
+
+  const res = await g().youtube.videos.list({ part: ["snippet", "statistics", "contentDetails", "status"], id: ids });
+  const byId = new Map((res.data.items ?? []).map((video) => [video.id, video]));
+  return ids.flatMap((id) => {
+    const video = byId.get(id);
+    return video ? [videoFound(video, channelTitle)] : [];
+  });
+}
+
+function videoFound(video: youtube_v3.Schema$Video, channelTitle: string): Found {
+  const snippet = video.snippet ?? {};
+  const stats = video.statistics ?? {};
+  const lines = [
+    `Title: ${snippet.title ?? ""}`,
+    `Published: ${(snippet.publishedAt ?? "").slice(0, 10)}`,
+    video.contentDetails?.duration && `Duration: ${readableDuration(video.contentDetails.duration)}`,
+    video.status?.privacyStatus && `Visibility: ${video.status.privacyStatus}`,
+    stats.viewCount && `Views: ${stats.viewCount}`,
+    stats.likeCount && `Likes: ${stats.likeCount}`,
+    stats.commentCount && `Comments: ${stats.commentCount}`,
+    snippet.tags?.length && `Tags: ${snippet.tags.slice(0, 15).join(", ")}`,
+    `Description:\n${snippet.description ?? ""}`,
+  ].filter(Boolean);
+  return {
+    docId: `youtube:${video.id}`,
+    source: "youtube",
+    title: snippet.title ?? video.id ?? "Video",
+    url: video.id ? `https://www.youtube.com/watch?v=${video.id}` : null,
+    container: channelTitle,
+    author: snippet.channelTitle ?? null,
+    updatedAt: snippet.publishedAt ?? "",
+    text: lines.join("\n"),
+  };
+}
+
+/** "PT1H2M3S" → "1:02:03" */
+function readableDuration(iso: string): string {
+  const match = /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/.exec(iso);
+  if (!match) return iso;
+  const [hours, minutes, seconds] = [match[1], match[2], match[3]].map((part) => Number(part ?? 0));
+  const mmss = `${String(minutes).padStart(hours ? 2 : 1, "0")}:${String(seconds).padStart(2, "0")}`;
+  return hours ? `${hours}:${mmss}` : mmss;
+}
+
 // ─── Reading a result ────────────────────────────────────────────────────
 
 /** Opens a live search result in full: the Drive file, the email thread or the Chat thread. */
@@ -260,6 +539,8 @@ export function readLive(item: Found): Promise<Found[]> {
   if (item.docId.startsWith("drive:")) return readDrive(item);
   if (item.docId.startsWith("gmail:")) return readGmail(item);
   if (item.docId.startsWith("gchat:")) return readChat(item);
+  // Directory and YouTube results are already complete.
+  if (item.docId.startsWith("directory:") || item.docId.startsWith("youtube:")) return Promise.resolve([item]);
   if (item.docId.startsWith("gspace:")) return readSpaceMessages(item.docId.slice("gspace:".length), item.container);
   return Promise.reject(new Error("this result can't be opened"));
 }

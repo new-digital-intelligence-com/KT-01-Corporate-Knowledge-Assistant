@@ -325,6 +325,16 @@
   background: color-mix(in srgb, var(--gchat) 14%, transparent);
 }
 
+.pillDirectory {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+}
+
+.pillYoutube {
+  color: var(--gmail);
+  background: color-mix(in srgb, var(--gmail) 14%, transparent);
+}
+
 .sourceMeta {
   font-size: 0.8rem;
   color: var(--muted);

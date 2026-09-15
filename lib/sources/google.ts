@@ -11,6 +11,12 @@ export const GOOGLE_SCOPES = {
     "https://www.googleapis.com/auth/chat.messages.readonly",
   ],
   directory: ["https://www.googleapis.com/auth/admin.directory.user.readonly"],
+  groups: [
+    "https://www.googleapis.com/auth/admin.directory.group.readonly",
+    "https://www.googleapis.com/auth/admin.directory.group.member.readonly",
+  ],
+  roles: ["https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly"],
+  youtube: ["https://www.googleapis.com/auth/youtube.readonly"],
 };
 
 /** Everything `npm run google-login` asks the signed-in person to allow. */
@@ -19,6 +25,9 @@ export const USER_SCOPES = [
   ...GOOGLE_SCOPES.gmail,
   ...GOOGLE_SCOPES.chat,
   ...GOOGLE_SCOPES.directory,
+  ...GOOGLE_SCOPES.groups,
+  ...GOOGLE_SCOPES.roles,
+  ...GOOGLE_SCOPES.youtube,
 ];
 
 // Desktop OAuth clients accept any loopback address as the redirect target.

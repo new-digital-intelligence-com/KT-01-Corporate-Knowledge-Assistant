@@ -38,6 +38,8 @@ const PILL: Record<Source, string> = {
   drive: styles.pillDrive,
   gmail: styles.pillGmail,
   gchat: styles.pillChat,
+  directory: styles.pillDirectory,
+  youtube: styles.pillYoutube,
 };
 
 export default function Home() {
