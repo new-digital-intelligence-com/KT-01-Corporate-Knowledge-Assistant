@@ -1,7 +1,8 @@
 import { answerQuestion, describeAssistantError } from "../assistant";
 import { envList } from "../config";
-import { clip } from "../text";
-import type { AssistantEvent, FinalAnswer } from "../types";
+import { liveGoogleAvailable, threadMessages } from "../live";
+import { clip, errorMessage } from "../text";
+import type { AssistantEvent, FinalAnswer, HistoryTurn } from "../types";
 import { editMessage, getSpace, msSinceLastWrite, postMessage } from "./client";
 import { plain, renderAnswer, renderProgress } from "./render";
 import { claimEvent, conversationHistory, finishEvent, saveTurn } from "./store";
@@ -105,10 +106,10 @@ export async function handleEvent(event: ChatEvent, deliveryId: string, log: Log
   const payload = chat.messagePayload;
   if (!payload) {
     const added = chat.addedToSpacePayload?.space;
-    if (added?.name && claimEvent(`added:${deliveryId}`)) {
+    if (added?.name && (await claimEvent(`added:${deliveryId}`).catch(() => true))) {
       log(`added to ${added.name}`);
       await postMessage(added.name, (await isExternalSpace(added, added.name)) ? EXTERNAL_SPACE : WELCOME);
-      finishEvent(`added:${deliveryId}`);
+      await finishEvent(`added:${deliveryId}`).catch(() => undefined);
     }
     return;
   }
@@ -119,7 +120,12 @@ export async function handleEvent(event: ChatEvent, deliveryId: string, log: Log
   if (message.sender?.type === "BOT" || chat.user?.type === "BOT") return;
 
   const eventId = message.name ?? deliveryId;
-  if (!claimEvent(eventId)) {
+  // If the memory store is unreachable, answer anyway rather than drop the question.
+  const claimed = await claimEvent(eventId).catch((err) => {
+    log(`memory unavailable, answering anyway (${errorMessage(err)})`);
+    return true;
+  });
+  if (!claimed) {
     log("duplicate delivery skipped");
     return;
   }
@@ -140,7 +146,7 @@ export async function handleEvent(event: ChatEvent, deliveryId: string, log: Log
         : null;
   if (refusal) {
     await postMessage(space, refusal, thread);
-    finishEvent(eventId);
+    await finishEvent(eventId).catch(() => undefined);
     if (question) log(`refused ${asker ?? "unknown"} in ${space}: ${refusal.slice(0, 60)}`);
     return;
   }
@@ -166,11 +172,17 @@ export async function handleEvent(event: ChatEvent, deliveryId: string, log: Log
       };
 
       try {
-        await answerQuestion(question, conversationHistory(conversation), emit, undefined, {
+        const [history, threadText] = await Promise.all([
+          conversationHistory(conversation).catch((): HistoryTurn[] => []),
+          // Asked inside a thread: read the whole thread first, so "that", "above" or "his idea" make sense.
+          thread && liveGoogleAvailable() ? threadMessages(thread).catch(() => "") : Promise.resolve(""),
+        ]);
+        await answerQuestion(question, history, emit, undefined, {
           space,
           spaceName: payload.space?.displayName || undefined,
           spaceType: payload.space?.spaceType,
           asker: chat.user?.displayName || asker || undefined,
+          threadMessages: threadText || undefined,
         });
       } catch (err) {
         failure = describeAssistantError(err);
@@ -178,10 +190,14 @@ export async function handleEvent(event: ChatEvent, deliveryId: string, log: Log
       await edits;
 
       const reply = answer ? renderAnswer(answer) : `⚠️ ${plain(failure ?? "Something went wrong. Please ask again.")}`;
-      if (answer) saveTurn({ conversation, asker, question, answer: answer.text, status: answer.status });
+      if (answer) {
+        await saveTurn({ conversation, asker, question, answer: answer.text, status: answer.status }).catch((err) =>
+          log(`memory not saved (${errorMessage(err)})`),
+        );
+      }
       // If the edit still fails after retries, post the reply as a new message rather than lose it.
       await editMessage(placeholder, reply).catch(() => postMessage(space, reply, thread));
-      finishEvent(eventId);
+      await finishEvent(eventId).catch(() => undefined);
       log(answer ? `answered (${answer.status}, ${answer.citations.length} source(s))` : `failed: ${failure ?? "unknown error"}`);
     });
   } finally {

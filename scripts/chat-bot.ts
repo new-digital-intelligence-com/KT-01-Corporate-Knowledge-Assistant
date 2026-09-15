@@ -30,7 +30,7 @@ function withHint(message: string): string {
   return hint ? `${message}\n          → ${hint}` : message;
 }
 
-function main() {
+async function main() {
   const subscriptionName = env("CHAT_PUBSUB_SUBSCRIPTION");
   const keyFile = env("CHAT_BOT_KEY_FILE");
   const projectId = subscriptionName && /^projects\/([^/]+)\/subscriptions\/[^/]+$/.exec(subscriptionName)?.[1];
@@ -50,7 +50,7 @@ function main() {
     console.warn("⚠ CHAT_ALLOWED_DOMAINS is not set: anyone who can reach the app may ask questions.");
   }
 
-  const released = releaseUnfinishedEvents();
+  const released = await releaseUnfinishedEvents().catch(() => 0);
   if (released) log(`${released} question(s) from the last run weren't finished; they'll be answered when Pub/Sub redelivers them`);
 
   const subscription = new PubSub({ projectId, keyFilename: keyFile }).subscription(subscriptionName, {

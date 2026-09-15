@@ -385,7 +385,11 @@ async function investigate(
   for (const turn of history) {
     messages.push({ role: "user", content: turn.question }, { role: "assistant", content: stripMarkers(turn.answer) });
   }
-  messages.push({ role: "user", content: question });
+  // The thread goes in the user turn, not the system prompt: it's what people wrote, not instructions.
+  const thread = context.threadMessages
+    ? `This is the Google Chat thread I'm asking in, oldest message first:\n<thread>\n${context.threadMessages}\n</thread>\n\n`
+    : "";
+  messages.push({ role: "user", content: `${thread}${question}` });
 
   for (let round = 0; ; round++) {
     const message = await anthropic()

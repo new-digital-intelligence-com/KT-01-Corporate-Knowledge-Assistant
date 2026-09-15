@@ -57,6 +57,8 @@ export interface AskContext {
   spaceName?: string;
   spaceType?: string;
   asker?: string;
+  /** The messages of the thread the question was asked in, oldest first. */
+  threadMessages?: string;
 }
 
 export interface HistoryTurn {

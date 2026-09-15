@@ -233,6 +233,20 @@ async function readChat(item: Found): Promise<Found[]> {
   return pieces(item, lines.join("\n"));
 }
 
+/** The latest messages of one thread as "[date] name: text" lines, oldest first. */
+export async function threadMessages(thread: string, limit = 30): Promise<string> {
+  const parent = thread.split("/threads/")[0];
+  const messages: chat_v1.Schema$Message[] = [];
+  let pageToken: string | undefined;
+  do {
+    const res = await g().chat.spaces.messages.list({ parent, filter: `thread.name = ${thread}`, pageSize: 200, pageToken });
+    messages.push(...(res.data.messages ?? []));
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken && messages.length < 1000);
+  const lines = await Promise.all(messages.filter((m) => messageText(m)).slice(-limit).map(messageLine));
+  return lines.join("\n");
+}
+
 /** The latest messages in a space (from the last two weeks, newest `limit`), read as the signed-in person. */
 export async function readSpaceMessages(space: string, label?: string, limit = 40): Promise<Found[]> {
   const since = new Date(Date.now() - 14 * 86_400_000).toISOString();
