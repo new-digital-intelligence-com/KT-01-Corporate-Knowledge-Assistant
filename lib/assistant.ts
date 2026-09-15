@@ -3,13 +3,14 @@ import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { z } from "zod";
 import { model } from "./config";
 import { getChunks, getDocumentChunks, getStats, type ChunkRow } from "./db";
-import { liveGoogleAvailable, readLive, searchChat, searchDrive, searchGmail, type Found } from "./live";
+import { liveGoogleAvailable, readLive, readSpaceMessages, searchChat, searchDrive, searchGmail, type Found } from "./live";
 import { searchChunks } from "./search";
 import { clip, errorMessage } from "./text";
 import {
   SOURCES,
   SOURCE_LABELS,
   type AnswerStatus,
+  type AskContext,
   type AssistantEvent,
   type Citation,
   type FinalAnswer,
@@ -118,45 +119,64 @@ const READ_RESULT: Anthropic.Beta.BetaTool = {
   },
 };
 
-function availableTools(): Anthropic.Beta.BetaTool[] {
+const READ_SPACE: Anthropic.Beta.BetaTool = {
+  name: "read_space_messages",
+  description:
+    "Read the most recent messages of the Google Chat space where the question was asked, to understand what " +
+    "\"this\", \"here\" or the ongoing discussion refers to. Returns the messages as passages with ids you can cite.",
+  input_schema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+function availableTools(context: AskContext): Anthropic.Beta.BetaTool[] {
   const tools: Anthropic.Beta.BetaTool[] = [];
   if (liveGoogleAvailable()) tools.push(SEARCH_DRIVE, SEARCH_GMAIL, SEARCH_CHAT);
+  if (liveGoogleAvailable() && context.space) tools.push(READ_SPACE);
   if (getStats().documents > 0) tools.push(SEARCH_INDEX);
   tools.push(READ_RESULT);
   return tools;
 }
 
-function answerSystemPrompt(): string {
-  return `You are the internal knowledge assistant for our company. Staff ask you questions in Google Chat or on a web page, and you answer them only from company sources, which you search live with your tools: Google Drive, Gmail and Google Chat, plus an index of other content when that tool is available. Nobody reviews your answers before staff read them, so they have to be accurate on their own.
+function answerSystemPrompt(context: AskContext): string {
+  const where = context.spaceName
+    ? `This question was asked in the Google Chat space "${context.spaceName}".`
+    : context.spaceType === "DIRECT_MESSAGE"
+      ? "This question was asked in a direct message with you."
+      : "";
+  const who = context.asker ? ` It was asked by ${context.asker}.` : "";
 
-Today's date is ${new Date().toISOString().slice(0, 10)}.
+  return `You are Claude, the AI assistant of our company, working inside Google Chat. You are a capable general assistant: you explain, reason, give honest opinions and recommendations, draft and edit text, brainstorm and use your general knowledge. You also have live access to the company's Google Drive, Gmail and Google Chat through your tools. Anyone in the company can ask you anything.
 
-How to answer:
-- Search before you answer, even when you think you know. Search the sources that fit the question, often several of them, with short keyword queries: synonyms, the wording an official document would use, and both English and the language of the question.
-- Search results show titles and snippets only. Open the most relevant results with read_result before relying on them, and cite the passages you read.
-- Put citation markers right after each sentence they support, using the ids from tool results, like [#123] or [#123][#456]. Every sentence that states something about the company needs at least one marker. Only cite ids that a tool returned in this conversation.
-- Use only what the sources say. Don't fill gaps with general knowledge or assumptions about how companies usually work.
-- Sources can be outdated or disagree. Prefer the most recent and most authoritative one (an official document over a passing chat remark), give its date when timing matters, and say plainly when sources conflict, citing each side.
-- If the sources don't answer the question, say you couldn't find it, mention anything related you did find, and suggest who might know. Don't guess.
-- Write in English, even when the question or the sources are in another language, unless the person asks for a specific language. Lead with the direct answer, then only the details that matter, in a few sentences or a short list. Plain text: use "- " for list items and no headings.`;
+Today's date is ${new Date().toISOString().slice(0, 10)}. ${where}${who}
+
+How to work:
+- Decide whether the question involves the company: its AI employees, projects, clients, people, documents, decisions or anything that happened internally. If it does, search the company sources before answering, even when you think you know: short keyword queries in the sources that fit, then open the most relevant results with read_result and base company facts on what you read.
+- Words like "this", "here", "this AI employee" or "this project" usually refer to the topic of the space you were asked in. Use the space name, and read its recent messages when that helps.
+- If the question doesn't need company information (general knowledge, how-to, writing, brainstorming, opinions on a general topic), answer directly without searching.
+- Cite company facts: put markers like [#123] right after each sentence that states something about the company, using ids from tool results, and only ids a tool returned in this conversation. Your own reasoning, opinions, general knowledge and suggestions don't get markers.
+- Never present guesses about the company as facts. If the sources don't cover something company-specific, say so plainly, then still help as far as you can and make clear which part is your own view.
+- When asked for your opinion or an assessment, give a genuine, specific one: strengths, weaknesses, risks and concrete suggestions, grounded in what you found.
+- Sources can be outdated or disagree. Prefer the most recent and most authoritative one, and say when they conflict.
+- Write in English, even when the question or the sources are in another language, unless the person asks for a specific language. Lead with the direct answer and keep it as short as the question allows. Plain text: use "- " for list items and no headings.`;
 }
 
-const VERIFY_SYSTEM = `You fact-check answers written by a company knowledge assistant before staff see them. You receive the question, the passages the answer cites, and the draft answer, whose citation markers like [#123] refer to passage ids.
+const VERIFY_SYSTEM = `You fact-check answers written by the company's AI assistant before staff see them. You receive the question, the company passages the answer cites, and the draft answer, whose citation markers like [#123] refer to passage ids.
 
-Break the draft into its individual factual claims and judge each one strictly against the passages it cites:
+Only check statements that present facts about the company: its people, clients, projects, AI employees, documents, numbers, dates, decisions or what someone said. Leave everything else out: general knowledge, explanations, reasoning, opinions, assessments, recommendations and suggestions are the assistant's own contribution and are not checked.
+
+Judge each company fact strictly against the passages it cites:
 - supported: the cited passages state it, directly or as a plain paraphrase.
-- partial: the cited passages back only part of it, or the claim is broader, more certain or more specific (numbers, dates, names, deadlines) than they are.
-- unsupported: the cited passages don't state it, or the claim has no citation. Judge only against the passages, never by whether it's true in general.
-Sentences that only say something couldn't be found, or suggest where to look, are not claims; leave them out.
+- partial: the cited passages back only part of it, or the statement is broader, more certain or more specific (numbers, dates, names, deadlines) than they are.
+- unsupported: the cited passages don't state it, or the company fact has no citation.
+Sentences that only say something couldn't be found are not facts; leave them out.
 
-In each note, say briefly why, quoting the passage wording when that helps; leave the note empty for a plainly supported claim.
-Under conflicts, list disagreements between passages that matter for the question (different figures, dates or rules); otherwise leave it empty.
-Set is_not_found_answer to true only when the draft's main message is that the answer isn't in company sources.
-Write claims and notes in the language of the draft.`;
+In each note, say briefly why, quoting the passage wording when that helps; leave the note empty for a plainly supported fact.
+Under conflicts, list disagreements between passages that matter for the question; otherwise leave it empty.
+Set is_not_found_answer to true only when the draft's main message is that the requested company information couldn't be found.
+Write claims and notes in English.`;
 
-const REWRITE_SYSTEM = `You revise answers from a company knowledge assistant so that every statement is backed by the passages provided. Staff read the result without anyone reviewing it.
+const REWRITE_SYSTEM = `You revise answers from the company's AI assistant. A fact-check found company facts in the draft that the cited passages don't fully back.
 
-Keep what the passages support, correct partially supported statements so they say exactly what the passages say, and remove anything the passages don't support. Put citation markers with passage ids, like [#123], right after each sentence they support, citing only the passages provided. If nothing substantive remains, say the answer couldn't be found in company sources. Keep the language, the directness and the plain-text format of the draft ("- " for list items, no headings). Output only the revised answer.`;
+Fix only those: correct partially supported statements so they say exactly what the passages say, and remove, or clearly mark as uncertain, anything the passages don't support. Keep everything else as it is, including general knowledge, reasoning, opinions and recommendations. Keep citation markers with passage ids, like [#123], after company facts, citing only the passages provided. Keep the language, the directness and the plain-text format of the draft ("- " for list items, no headings). Output only the revised answer.`;
 
 const VerificationSchema = z.object({
   is_not_found_answer: z.boolean(),
@@ -176,10 +196,8 @@ export async function answerQuestion(
   history: HistoryTurn[],
   emit: Emit,
   signal?: AbortSignal,
+  context: AskContext = {},
 ): Promise<void> {
-  if (!liveGoogleAvailable() && getStats().documents === 0) {
-    throw new AssistantError("No company sources are connected yet. Sign in with Google (npm run google-login) first.");
-  }
 
   let nextLiveId = LIVE_ID_START;
   const research: Research = {
@@ -192,10 +210,16 @@ export async function answerQuestion(
   };
   const passages = research.passages;
 
-  emit({ type: "progress", message: "Searching company sources…" });
-  let draft = keepKnownMarkers(await investigate(question, history, research, emit, signal), passages);
+  emit({ type: "progress", message: "Thinking…" });
+  let draft = keepKnownMarkers(await investigate(question, history, research, emit, signal, context), passages);
 
-  emit({ type: "progress", message: `Checking the answer against ${citedIds(draft).length} cited source(s)…` });
+  // Nothing was looked up, so there are no company facts to check.
+  if (passages.size === 0) {
+    emit({ type: "answer", answer: finalize(draft, { is_not_found_answer: false, claims: [], conflicts: [] }, passages, false) });
+    return;
+  }
+
+  emit({ type: "progress", message: `Checking company facts against ${citedIds(draft).length} cited source(s)…` });
   let check = await verify(question, draft, passages, signal);
   let rewritten = false;
 
@@ -218,8 +242,9 @@ async function investigate(
   research: Research,
   emit: Emit,
   signal?: AbortSignal,
+  context: AskContext = {},
 ): Promise<string> {
-  const tools = availableTools();
+  const tools = availableTools(context);
   const messages: Anthropic.Beta.BetaMessageParam[] = [];
   for (const turn of history) {
     messages.push({ role: "user", content: turn.question }, { role: "assistant", content: stripMarkers(turn.answer) });
@@ -235,7 +260,7 @@ async function investigate(
           betas: BETAS,
           fallbacks: "default",
           cache_control: { type: "ephemeral" },
-          system: answerSystemPrompt(),
+          system: answerSystemPrompt(context),
           tools,
           tool_choice: round >= MAX_TOOL_ROUNDS ? { type: "none" } : { type: "auto" },
           messages,
@@ -251,7 +276,7 @@ async function investigate(
     if (message.stop_reason !== "tool_use" || calls.length === 0) return textOf(message);
 
     const results: Anthropic.Beta.BetaContentBlockParam[] = await Promise.all(
-      calls.map(async (call) => ({ type: "tool_result" as const, tool_use_id: call.id, ...(await runTool(call, research, emit)) })),
+      calls.map(async (call) => ({ type: "tool_result" as const, tool_use_id: call.id, ...(await runTool(call, research, emit, context)) })),
     );
     if (round + 1 >= MAX_TOOL_ROUNDS) {
       results.push({ type: "text", text: "That was your last search. Answer now from what you already have." });
@@ -260,7 +285,12 @@ async function investigate(
   }
 }
 
-async function runTool(call: Anthropic.Beta.BetaToolUseBlock, research: Research, emit: Emit): Promise<ToolResult> {
+async function runTool(
+  call: Anthropic.Beta.BetaToolUseBlock,
+  research: Research,
+  emit: Emit,
+  context: AskContext,
+): Promise<ToolResult> {
   const input = (call.input ?? {}) as Record<string, unknown>;
   const query = typeof input.query === "string" ? input.query.trim() : "";
   const limit = typeof input.limit === "number" ? Math.min(Math.max(Math.round(input.limit), 1), 10) : 6;
@@ -286,6 +316,15 @@ async function runTool(call: Anthropic.Beta.BetaToolUseBlock, research: Research
           content: hits.length
             ? hits.map((hit) => formatPassage(hit, 1500)).join("\n\n")
             : "No passages matched. Try other keywords, synonyms or another language.",
+        };
+      }
+
+      case "read_space_messages": {
+        if (!context.space) return { content: "The space for this question isn't known.", is_error: true };
+        emit({ type: "progress", message: `Reading recent messages in ${context.spaceName ?? "this space"}` });
+        const rows = (await readSpaceMessages(context.space, context.spaceName)).map(research.add);
+        return {
+          content: rows.length ? rows.map((row) => formatPassage(row, 4000)).join("\n\n") : "No recent messages in this space.",
         };
       }
 
@@ -405,7 +444,7 @@ function finalize(draft: string, check: Verification, passages: Passages, rewrit
   const numbers = new Map<string, number>();
   const citations: Citation[] = [];
 
-  let text = draft
+  const text = draft
     .replace(MARKER, (_, raw: string) => {
       const id = Number(raw);
       const passage = passages.get(id);
@@ -430,16 +469,7 @@ function finalize(draft: string, check: Verification, passages: Passages, rewrit
     .trim();
 
   const unbacked = check.claims.filter((c) => c.verdict !== "supported").length;
-  let status: AnswerStatus;
-  if (check.is_not_found_answer) {
-    status = "not_found";
-  } else if (citations.length === 0) {
-    // Claims with nothing behind them are never shown as an answer.
-    status = "not_found";
-    if (check.claims.length > 0) text = "I couldn't find a reliable answer to this in company sources.";
-  } else {
-    status = unbacked === 0 ? "verified" : "partially_verified";
-  }
+  const status: AnswerStatus = check.is_not_found_answer ? "not_found" : unbacked === 0 ? "verified" : "partially_verified";
 
   return { text, status, citations, checks: check.claims, conflicts: check.conflicts, rewritten };
 }

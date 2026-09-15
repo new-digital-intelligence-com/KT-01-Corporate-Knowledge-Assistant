@@ -222,6 +222,37 @@ async function readChat(item: Found): Promise<Found[]> {
   return pieces(item, lines.join("\n"));
 }
 
+/** The latest messages in a space (from the last two weeks, newest `limit`), read as the signed-in person. */
+export async function readSpaceMessages(space: string, label?: string, limit = 40): Promise<Found[]> {
+  const since = new Date(Date.now() - 14 * 86_400_000).toISOString();
+  const messages: chat_v1.Schema$Message[] = [];
+  let pageToken: string | undefined;
+  let pages = 0;
+  do {
+    const res = await g().chat.spaces.messages.list({ parent: space, filter: `createTime > "${since}"`, pageSize: 1000, pageToken });
+    messages.push(...(res.data.messages ?? []));
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken && ++pages < 3);
+
+  const recent = messages.filter((m) => messageText(m)).slice(-limit);
+  if (!recent.length) return [];
+  const name = label || (await spaceInfo(space)).displayName || space;
+  const lines = await Promise.all(recent.map(messageLine));
+  return pieces(
+    {
+      docId: `gspace:${space}`,
+      source: "gchat",
+      title: `${name}: recent messages`,
+      url: chatUrl(space, null),
+      container: name,
+      author: null,
+      updatedAt: recent.at(-1)?.createTime ?? "",
+      text: "",
+    },
+    lines.join("\n"),
+  );
+}
+
 // ─── Reading a result ────────────────────────────────────────────────────
 
 /** Opens a live search result in full: the Drive file, the email thread or the Chat thread. */
@@ -229,6 +260,7 @@ export function readLive(item: Found): Promise<Found[]> {
   if (item.docId.startsWith("drive:")) return readDrive(item);
   if (item.docId.startsWith("gmail:")) return readGmail(item);
   if (item.docId.startsWith("gchat:")) return readChat(item);
+  if (item.docId.startsWith("gspace:")) return readSpaceMessages(item.docId.slice("gspace:".length), item.container);
   return Promise.reject(new Error("this result can't be opened"));
 }
 

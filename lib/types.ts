@@ -48,6 +48,15 @@ export type AssistantEvent =
   | { type: "answer"; answer: FinalAnswer }
   | { type: "error"; message: string };
 
+/** Where and by whom a question was asked, so the assistant can tell what "this" or "here" means. */
+export interface AskContext {
+  /** Chat space resource name, e.g. spaces/AAAA. */
+  space?: string;
+  spaceName?: string;
+  spaceType?: string;
+  asker?: string;
+}
+
 export interface HistoryTurn {
   question: string;
   answer: string;

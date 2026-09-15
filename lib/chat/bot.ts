@@ -1,7 +1,5 @@
 import { answerQuestion, describeAssistantError } from "../assistant";
 import { envList } from "../config";
-import { getStats } from "../db";
-import { liveGoogleAvailable } from "../live";
 import { clip } from "../text";
 import type { AssistantEvent, FinalAnswer } from "../types";
 import { editMessage, getSpace, msSinceLastWrite, postMessage } from "./client";
@@ -31,6 +29,8 @@ interface ChatMessage {
   /** The text without the @mention of the app. */
   argumentText?: string;
   thread?: { name?: string };
+  /** True when the message was posted inside an existing thread. */
+  threadReply?: boolean;
   sender?: { type?: string };
 }
 
@@ -42,13 +42,10 @@ const PROGRESS_EVERY_MS = 3000;
 const SPACE_WRITE_GAP_MS = 1500;
 
 const WELCOME = [
-  "👋 Hi, I'm the *Knowledge Assistant*.",
-  "Ask me about how the company works. In a space, mention me: _@Knowledge Assistant how do I submit an expense claim?_",
-  "I answer only from company sources, check every answer against them, and link to where each fact comes from.",
+  "👋 Hi, I'm the *Knowledge Assistant*: Claude, with live access to the company's Drive, Gmail and Chat.",
+  "Ask me anything. In a space, mention me: _@Knowledge Assistant what do you think of this AI employee?_",
+  "When a question is about the company, I search our sources and link to them.",
 ].join("\n");
-
-const NOTHING_INDEXED =
-  "I'm set up, but no company sources are connected yet, so I can't answer questions. (Admin: sign in with `npm run google-login`.)";
 
 const EXTERNAL_SPACE =
   "I only answer in spaces without people from outside the company, because my answers come from internal sources. Send me a direct message instead.";
@@ -128,8 +125,9 @@ export async function handleEvent(event: ChatEvent, deliveryId: string, log: Log
   }
 
   const question = (message.argumentText ?? message.text ?? "").trim();
-  const thread = message.thread?.name ?? null;
-  // In a DM every message can start its own thread, so the whole DM is one conversation.
+  // Reply inside a thread only when the question was asked inside one; otherwise in the main conversation.
+  const thread = message.threadReply ? (message.thread?.name ?? null) : null;
+  // A DM, or the main flow of a space, is one conversation; each thread is its own.
   const conversation = payload.space?.spaceType === "DIRECT_MESSAGE" ? space : (thread ?? space);
   const asker = chat.user?.email ?? chat.user?.name ?? null;
 
@@ -138,19 +136,17 @@ export async function handleEvent(event: ChatEvent, deliveryId: string, log: Log
     : (await isExternalSpace(payload.space, space))
       ? EXTERNAL_SPACE
       : !question
-        ? "Ask me a question about the company, for example: _How do I submit an expense claim?_"
-        : !liveGoogleAvailable() && getStats().documents === 0
-          ? NOTHING_INDEXED
-          : null;
+        ? "Ask me anything, for example: _What is GP-01 about?_ or _What do you think of this AI employee?_"
+        : null;
   if (refusal) {
     await postMessage(space, refusal, thread);
     finishEvent(eventId);
-    if (refusal !== NOTHING_INDEXED && question) log(`refused ${asker ?? "unknown"} in ${space}: ${refusal.slice(0, 60)}`);
+    if (question) log(`refused ${asker ?? "unknown"} in ${space}: ${refusal.slice(0, 60)}`);
     return;
   }
 
   log(`question from ${asker ?? "unknown"} in ${space}: ${clip(question, 80)}`);
-  const placeholder = await postMessage(space, renderProgress("Searching company sources…"), thread);
+  const placeholder = await postMessage(space, renderProgress("Thinking…"), thread);
   openPlaceholders.add(placeholder);
 
   try {
@@ -170,7 +166,12 @@ export async function handleEvent(event: ChatEvent, deliveryId: string, log: Log
       };
 
       try {
-        await answerQuestion(question, conversationHistory(conversation), emit);
+        await answerQuestion(question, conversationHistory(conversation), emit, undefined, {
+          space,
+          spaceName: payload.space?.displayName || undefined,
+          spaceType: payload.space?.spaceType,
+          asker: chat.user?.displayName || asker || undefined,
+        });
       } catch (err) {
         failure = describeAssistantError(err);
       }
