@@ -4,12 +4,15 @@ import { z } from "zod";
 import { env, model } from "./config";
 import { getChunks, getDocumentChunks, getStats, type ChunkRow } from "./db";
 import {
+  checkAvailability,
   keyDocumentConfigured,
   listAdminRoles,
+  listCalendars,
   listGroupMembers,
   liveGoogleAvailable,
   readLive,
   readSpaceMessages,
+  searchCalendar,
   searchChat,
   searchDrive,
   searchKeyDocument,
@@ -224,6 +227,49 @@ const AI_TRACKER: Anthropic.Beta.BetaTool = {
   },
 };
 
+const SEARCH_CALENDAR: Anthropic.Beta.BetaTool = {
+  name: "search_calendar",
+  description:
+    "Read events from the signed-in person's Google Calendar (read-only): title, time, location, organizer, attendees " +
+    "and their responses, video link and description. Without dates it covers the next two weeks. Dates can be " +
+    "'2026-09-20' or a full timestamp. Use calendar_id for another calendar from list_calendars.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "Optional words to match in the event, e.g. 'stand-up'" },
+      start: { type: "string", description: "Start of the range, e.g. '2026-09-20' (default: now)" },
+      end: { type: "string", description: "End of the range (default: two weeks after the start)" },
+      calendar_id: { type: "string", description: "Calendar id (default: the person's own calendar)" },
+      limit: { type: "integer", minimum: 1, maximum: 50, description: "Maximum events (default 10)" },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+};
+
+const LIST_CALENDARS: Anthropic.Beta.BetaTool = {
+  name: "list_calendars",
+  description: "List the calendars the signed-in person can see (own and shared), with their ids and access level.",
+  input_schema: { type: "object", properties: {}, additionalProperties: false },
+};
+
+const CHECK_AVAILABILITY: Anthropic.Beta.BetaTool = {
+  name: "check_availability",
+  description:
+    "Show when people in the company are busy, to find a free slot for a meeting. Returns busy blocks only, never what " +
+    "the meetings are. Without dates it covers the next 7 days.",
+  input_schema: {
+    type: "object",
+    properties: {
+      emails: { type: "array", items: { type: "string" }, description: "Email addresses to check" },
+      start: { type: "string", description: "Start of the range, e.g. '2026-09-20' (default: now)" },
+      end: { type: "string", description: "End of the range (default: 7 days later)" },
+    },
+    required: ["emails"],
+    additionalProperties: false,
+  },
+};
+
 const LIST_ADMIN_ROLES: Anthropic.Beta.BetaTool = {
   name: "list_admin_roles",
   description:
@@ -257,6 +303,7 @@ const SEARCH_YOUTUBE: Anthropic.Beta.BetaTool = {
 function availableTools(context: AskContext): Anthropic.Beta.BetaTool[] {
   const tools: Anthropic.Beta.BetaTool[] = [];
   if (liveGoogleAvailable()) tools.push(SEARCH_DRIVE, SEARCH_GMAIL, SEARCH_CHAT, SEARCH_PEOPLE, SEARCH_GROUPS, LIST_GROUP_MEMBERS, LIST_ADMIN_ROLES);
+  if (liveGoogleAvailable()) tools.push(SEARCH_CALENDAR, LIST_CALENDARS, CHECK_AVAILABILITY);
   if (keyDocumentConfigured("catalog")) tools.push(AI_CATALOG);
   if (keyDocumentConfigured("tracker")) tools.push(AI_TRACKER);
   if (youtubeConfigured()) tools.push(SEARCH_YOUTUBE);
@@ -278,7 +325,7 @@ function answerSystemPrompt(context: AskContext): string {
       ? "\n- For anything about NDI's AI employees, check the two key documents first: ai_employee_catalog is the source of truth for what each AI employee is, and ai_employee_tracker holds its current progress (assignee, status, dates). If other documents disagree, the catalog wins on what an AI employee is and the tracker wins on progress; mention the difference."
       : "";
 
-  return `You are Claude, the AI assistant of our company, working inside Google Chat. You are a capable general assistant: you explain, reason, give honest opinions and recommendations, draft and edit text, brainstorm and use your general knowledge. You also have live, read-only access to the company's Google Drive, Gmail, Google Chat, Google Workspace directory (people, groups and admin roles) and YouTube channel through your tools. Anyone in the company can ask you anything.
+  return `You are Claude, the AI assistant of our company, working inside Google Chat. You are a capable general assistant: you explain, reason, give honest opinions and recommendations, draft and edit text, brainstorm and use your general knowledge. You also have live, read-only access to the company's Google Drive, Gmail, Google Chat, Google Workspace directory (people, groups and admin roles), YouTube channel and Google Calendar through your tools. Anyone in the company can ask you anything.
 
 Today's date is ${new Date().toISOString().slice(0, 10)}. ${where}${who}
 
@@ -489,6 +536,38 @@ async function runTool(
 
       case "search_youtube":
         return listFound("YouTube", query || "latest videos", await searchYouTube(query, Math.min(limit, 20)), research, emit);
+
+      case "search_calendar": {
+        const found = await searchCalendar(
+          query,
+          typeof input.start === "string" ? input.start : undefined,
+          typeof input.end === "string" ? input.end : undefined,
+          typeof input.calendar_id === "string" ? input.calendar_id : undefined,
+          typeof input.limit === "number" ? Math.min(Math.max(Math.round(input.limit), 1), 50) : 10,
+        );
+        const range = [input.start, input.end].filter(Boolean).join(" → ") || "the next two weeks";
+        return listFound("the calendar", query ? `${query} (${range})` : range, found, research, emit);
+      }
+
+      case "list_calendars": {
+        const rows = (await listCalendars()).map(research.add);
+        emit({ type: "progress", message: "Listing calendars" });
+        return { content: rows.map((row) => formatPassage(row, 4000)).join("\n\n") };
+      }
+
+      case "check_availability": {
+        const emails = Array.isArray(input.emails) ? input.emails.filter((e): e is string => typeof e === "string") : [];
+        if (!emails.length) return { content: "Give at least one email address.", is_error: true };
+        emit({ type: "progress", message: `Checking when ${emails.join(", ")} are busy` });
+        const rows = (
+          await checkAvailability(
+            emails,
+            typeof input.start === "string" ? input.start : undefined,
+            typeof input.end === "string" ? input.end : undefined,
+          )
+        ).map(research.add);
+        return { content: rows.map((row) => formatPassage(row, 6000)).join("\n\n") };
+      }
 
       case "search_people":
         return listFound("the Workspace directory", query || "everyone", await searchPeople(query, limit), research, emit);

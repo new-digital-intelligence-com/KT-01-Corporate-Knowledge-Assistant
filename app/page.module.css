@@ -335,6 +335,11 @@
   background: color-mix(in srgb, var(--gmail) 14%, transparent);
 }
 
+.pillCalendar {
+  color: var(--drive);
+  background: color-mix(in srgb, var(--drive) 14%, transparent);
+}
+
 .sourceMeta {
   font-size: 0.8rem;
   color: var(--muted);

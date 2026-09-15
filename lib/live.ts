@@ -1,4 +1,12 @@
-import { google, type admin_directory_v1, type chat_v1, type drive_v3, type gmail_v1, type youtube_v3 } from "googleapis";
+import {
+  google,
+  type admin_directory_v1,
+  type calendar_v3,
+  type chat_v1,
+  type drive_v3,
+  type gmail_v1,
+  type youtube_v3,
+} from "googleapis";
 import { env } from "./config";
 import type { ChunkRow } from "./db";
 import { keywords } from "./search";
@@ -30,6 +38,7 @@ let clients:
       chat: chat_v1.Chat;
       admin: admin_directory_v1.Admin;
       youtube: youtube_v3.Youtube;
+      calendar: calendar_v3.Calendar;
     }
   | undefined;
 
@@ -40,6 +49,7 @@ function g() {
     chat: google.chat({ version: "v1", auth: googleAuth(undefined, GOOGLE_SCOPES.chat) }),
     admin: google.admin({ version: "directory_v1", auth: googleAuth(undefined, GOOGLE_SCOPES.directory) }),
     youtube: google.youtube({ version: "v3", auth: googleAuth(undefined, GOOGLE_SCOPES.youtube) }),
+    calendar: google.calendar({ version: "v3", auth: googleAuth(undefined, GOOGLE_SCOPES.calendar) }),
   };
   return clients;
 }
@@ -547,6 +557,154 @@ function readableDuration(iso: string): string {
   return hours ? `${hours}:${mmss}` : mmss;
 }
 
+// ─── Google Calendar (read-only) ─────────────────────────────────────────
+
+const TWO_WEEKS_MS = 14 * 86_400_000;
+
+/** "2026-09-20" → the start or end of that day; anything else is passed through as given. */
+function moment(value: string | undefined, fallback: Date, endOfDay = false): string {
+  if (!value?.trim()) return fallback.toISOString();
+  const day = /^\d{4}-\d{2}-\d{2}$/.exec(value.trim());
+  if (day) return `${value.trim()}T${endOfDay ? "23:59:59" : "00:00:00"}Z`;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? fallback.toISOString() : parsed.toISOString();
+}
+
+let timeZone: Promise<string> | undefined;
+
+/** The signed-in person's calendar time zone, so times are shown the way they see them. */
+function calendarTimeZone(): Promise<string> {
+  timeZone ??= g()
+    .calendar.calendars.get({ calendarId: "primary" })
+    .then((res) => res.data.timeZone ?? "UTC")
+    .catch(() => "UTC");
+  return timeZone;
+}
+
+function at(value: string | null | undefined, zone: string): string {
+  if (!value) return "";
+  if (value.length <= 10) return `${value} (all day)`;
+  const moment = new Date(value);
+  return Number.isNaN(moment.getTime())
+    ? value
+    : moment.toLocaleString("sv-SE", { timeZone: zone, dateStyle: "short", timeStyle: "short" });
+}
+
+function when(event: calendar_v3.Schema$Event, zone: string): string {
+  const start = at(event.start?.dateTime ?? event.start?.date, zone);
+  const end = at(event.end?.dateTime ?? event.end?.date, zone);
+  return end ? `${start} → ${end}` : start;
+}
+
+/** Events in a date range, in one calendar (the person's own by default). */
+export async function searchCalendar(
+  query: string,
+  start: string | undefined,
+  end: string | undefined,
+  calendarId: string | undefined,
+  limit: number,
+): Promise<Found[]> {
+  const id = calendarId?.trim() || "primary";
+  const now = new Date();
+  const timeMin = moment(start, now);
+  const timeMax = moment(end, new Date(Date.parse(timeMin) + TWO_WEEKS_MS), true);
+
+  const zone = await calendarTimeZone();
+  const res = await g().calendar.events.list({
+    calendarId: id,
+    timeMin,
+    timeMax,
+    singleEvents: true,
+    orderBy: "startTime",
+    maxResults: Math.min(Math.max(limit, 1), 50),
+    ...(query.trim() ? { q: query.trim() } : {}),
+  });
+
+  const label = res.data.summary ?? id;
+  return (res.data.items ?? []).map((event) => {
+    const attendees = (event.attendees ?? [])
+      .map((a) => `${a.displayName || a.email}${a.responseStatus && a.responseStatus !== "needsAction" ? ` (${a.responseStatus})` : ""}`)
+      .join(", ");
+    const lines = [
+      `Title: ${event.summary ?? "(no title)"}`,
+      `When: ${when(event, zone)} (${zone})`,
+      event.location && `Where: ${event.location}`,
+      event.hangoutLink && `Video call: ${event.hangoutLink}`,
+      event.organizer?.email && `Organizer: ${event.organizer.displayName || event.organizer.email}`,
+      attendees && `Attendees: ${attendees}`,
+      event.recurringEventId && "Part of a recurring series",
+      event.status && event.status !== "confirmed" && `Status: ${event.status}`,
+      event.description && `Description:\n${clip(htmlToText(event.description), 4000)}`,
+    ].filter(Boolean);
+    return {
+      docId: `calendar:${id}:${event.id}`,
+      source: "calendar" as const,
+      title: event.summary ?? "(no title)",
+      url: event.htmlLink ?? null,
+      container: label,
+      author: event.organizer?.displayName ?? event.organizer?.email ?? null,
+      updatedAt: event.updated ?? event.start?.dateTime ?? event.start?.date ?? "",
+      text: lines.join("\n"),
+    };
+  });
+}
+
+/** The calendars the signed-in person can see, own and shared. */
+export async function listCalendars(): Promise<Found[]> {
+  const res = await g().calendar.calendarList.list({ maxResults: 100, showHidden: false });
+  const lines = (res.data.items ?? []).map((c) =>
+    `- ${c.summary ?? c.id}${c.primary ? " (main calendar)" : ""} | id: ${c.id} | access: ${c.accessRole ?? "?"}${c.timeZone ? ` | time zone: ${c.timeZone}` : ""}`,
+  );
+  return pieces(
+    {
+      docId: "calendar:list",
+      source: "calendar",
+      title: "Calendars",
+      url: "https://calendar.google.com/",
+      container: "Calendar",
+      author: null,
+      updatedAt: "",
+      text: "",
+    },
+    lines.length ? `${lines.length} calendar(s):\n${lines.join("\n")}` : "No calendars found.",
+  );
+}
+
+/** Busy times for people in the company, to find a free slot. Shows busy blocks only, never event details. */
+export async function checkAvailability(emails: string[], start: string | undefined, end: string | undefined): Promise<Found[]> {
+  const people = emails.map((email) => email.trim()).filter(Boolean).slice(0, 20);
+  if (!people.length) return [];
+  const timeMin = moment(start, new Date());
+  const timeMax = moment(end, new Date(Date.parse(timeMin) + 7 * 86_400_000), true);
+
+  const zone = await calendarTimeZone();
+  const res = await g().calendar.freebusy.query({
+    requestBody: { timeMin, timeMax, items: people.map((id) => ({ id })) },
+  });
+
+  const calendars = res.data.calendars ?? {};
+  const lines = people.map((email) => {
+    const entry = calendars[email];
+    if (entry?.errors?.length) return `- ${email}: not readable (${entry.errors.map((e) => e.reason).join(", ")})`;
+    const busy = (entry?.busy ?? []).map((slot) => `${at(slot.start, zone)} → ${at(slot.end, zone)}`);
+    return busy.length ? `- ${email} is busy:\n  ${busy.join("\n  ")}` : `- ${email}: no busy time in this range`;
+  });
+
+  return pieces(
+    {
+      docId: `calendar:freebusy:${people.join(",")}`,
+      source: "calendar",
+      title: `Availability ${timeMin.slice(0, 10)} → ${timeMax.slice(0, 10)}`,
+      url: "https://calendar.google.com/",
+      container: "Calendar",
+      author: null,
+      updatedAt: "",
+      text: "",
+    },
+    `Busy times between ${at(timeMin, zone)} and ${at(timeMax, zone)}, in ${zone}:\n${lines.join("\n")}`,
+  );
+}
+
 // ─── Key AI employee documents: the catalog and the tracker ──────────────
 
 export type KeyDocumentKind = "catalog" | "tracker";
@@ -651,7 +809,12 @@ export function readLive(item: Found): Promise<Found[]> {
   if (item.docId.startsWith("gmail:")) return readGmail(item);
   if (item.docId.startsWith("gchat:")) return readChat(item);
   // Directory and YouTube results are already complete.
-  if (item.docId.startsWith("directory:") || item.docId.startsWith("youtube:") || item.docId.startsWith("key:")) {
+  if (
+    item.docId.startsWith("directory:") ||
+    item.docId.startsWith("youtube:") ||
+    item.docId.startsWith("key:") ||
+    item.docId.startsWith("calendar:")
+  ) {
     return Promise.resolve([item]);
   }
   if (item.docId.startsWith("gspace:")) return readSpaceMessages(item.docId.slice("gspace:".length), item.container);

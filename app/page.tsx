@@ -40,6 +40,7 @@ const PILL: Record<Source, string> = {
   gchat: styles.pillChat,
   directory: styles.pillDirectory,
   youtube: styles.pillYoutube,
+  calendar: styles.pillCalendar,
 };
 
 export default function Home() {

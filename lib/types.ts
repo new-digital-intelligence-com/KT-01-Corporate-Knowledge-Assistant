@@ -1,6 +1,6 @@
 // Shared between the server and the browser, so nothing here may import server-only modules.
 
-export const SOURCES = ["slack", "drive", "gmail", "gchat", "directory", "youtube"] as const;
+export const SOURCES = ["slack", "drive", "gmail", "gchat", "directory", "youtube", "calendar"] as const;
 export type Source = (typeof SOURCES)[number];
 
 export const SOURCE_LABELS: Record<Source, string> = {
@@ -10,6 +10,7 @@ export const SOURCE_LABELS: Record<Source, string> = {
   gchat: "Google Chat",
   directory: "Workspace directory",
   youtube: "YouTube",
+  calendar: "Calendar",
 };
 
 export interface Citation {
