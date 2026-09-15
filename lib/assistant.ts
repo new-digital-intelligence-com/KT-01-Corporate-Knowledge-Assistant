@@ -217,7 +217,7 @@ const AI_TRACKER: Anthropic.Beta.BetaTool = {
     type: "object",
     properties: {
       query: { type: "string", description: "e.g. 'GP-01', 'Oleg' or 'in progress'" },
-      limit: { type: "integer", minimum: 1, maximum: 12, description: "Maximum rows (default 6)" },
+      limit: { type: "integer", minimum: 1, maximum: 60, description: "Maximum rows (default 25)" },
     },
     required: [],
     additionalProperties: false,
@@ -289,6 +289,7 @@ How to work:
 - Cite company facts: put markers like [#123] right after each sentence that states something about the company, using ids from tool results, and only ids a tool returned in this conversation. Your own reasoning, opinions, general knowledge and suggestions don't get markers.
 - Never present guesses about the company as facts. If the sources don't cover something company-specific, say so plainly, then still help as far as you can and make clear which part is your own view.
 - When asked for your opinion or an assessment, give a genuine, specific one: strengths, weaknesses, risks and concrete suggestions, grounded in what you found.
+- Before stating how many of something there are, make sure you have the complete list: tool results say how many items matched, and when only part is shown, fetch the rest first. Make every count you state match the items you list.
 - Sources can be outdated or disagree. Prefer the most recent and most authoritative one, and say when they conflict.
 - Write in English, even when the question or the sources are in another language, unless the person asks for a specific language. Lead with the direct answer and keep it as short as the question allows. Plain text: use "- " for list items and no headings.`;
 }
@@ -302,6 +303,7 @@ Judge each company fact strictly against the passages it cites:
 - partial: the cited passages back only part of it, or the statement is broader, more certain or more specific (numbers, dates, names, deadlines) than they are.
 - unsupported: the cited passages don't state it, or the company fact has no citation.
 Sentences that only say something couldn't be found are not facts; leave them out.
+Counts and totals are company facts too: a stated number ("you own 7") that disagrees with the passages or with the number of items the draft itself lists is at best partial.
 
 In each note, say briefly why, quoting the passage wording when that helps; leave the note empty for a plainly supported fact.
 Under conflicts, list disagreements between passages that matter for the question; otherwise leave it empty.
@@ -456,14 +458,22 @@ async function runTool(
       case "ai_employee_catalog":
       case "ai_employee_tracker": {
         const kind = call.name === "ai_employee_catalog" ? "catalog" : "tracker";
-        const max = typeof input.limit === "number" ? Math.min(Math.max(Math.round(input.limit), 1), 12) : 6;
-        const rows = (await searchKeyDocument(kind, query, max)).map(research.add);
-        emit({ type: "progress", message: `Checked the AI employee ${kind} for “${query || "everything"}”: ${rows.length} match(es)` });
-        return {
-          content: rows.length
-            ? rows.map((row) => formatPassage(row, 12_000)).join("\n\n")
-            : `Nothing in the ${kind} matched “${query}”. Try the AI employee's code, name or another keyword.`,
-        };
+        const [fallback, cap] = kind === "tracker" ? [25, 60] : [6, 12];
+        const max = typeof input.limit === "number" ? Math.min(Math.max(Math.round(input.limit), 1), cap) : fallback;
+        const { found, total } = await searchKeyDocument(kind, query, max);
+        const rows = found.map(research.add);
+        const unit = kind === "tracker" ? "row" : "slide";
+        emit({ type: "progress", message: `Checked the AI employee ${kind} for “${query || "everything"}”: ${total} ${unit}(s)` });
+        if (!rows.length) {
+          return { content: `Nothing in the ${kind} matched “${query}”. Try the AI employee's code, name or another keyword.` };
+        }
+        // State the total so a list is never mistaken for complete when it was cut off.
+        const summary = !query
+          ? `The ${kind} has ${total} ${unit}(s).`
+          : total > found.length
+            ? `${total} ${unit}(s) match “${query}”; only ${found.length} are shown. Call again with limit ${Math.min(total, cap)} before counting or listing them all.`
+            : `${total} ${unit}(s) match “${query}”, all shown below.`;
+        return { content: `${summary}\n\n${rows.map((row) => formatPassage(row, 12_000)).join("\n\n")}` };
       }
 
       case "list_admin_roles": {

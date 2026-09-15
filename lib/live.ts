@@ -591,7 +591,11 @@ async function keyDocument(fileId: string): Promise<KeyDocument> {
  * The slides (catalog) or rows (tracker) that match the query. An exact phrase such as "GP-01" counts far
  * more than loose words. With no query: the list of slides, or every row.
  */
-export async function searchKeyDocument(kind: KeyDocumentKind, query: string, limit: number): Promise<Found[]> {
+export async function searchKeyDocument(
+  kind: KeyDocumentKind,
+  query: string,
+  limit: number,
+): Promise<{ found: Found[]; total: number }> {
   const { setting, label } = KEY_DOCUMENTS[kind];
   const fileId = env(setting);
   if (!fileId) throw new Error(`${setting} is not set`);
@@ -605,7 +609,7 @@ export async function searchKeyDocument(kind: KeyDocumentKind, query: string, li
       kind === "catalog"
         ? `${doc.parts.length} slides:\n${doc.parts.map((part, i) => `${i + 1}. ${part.split("\n")[1] ?? ""}`).join("\n")}`
         : doc.parts.join("\n");
-    return pieces(base, overview);
+    return { found: pieces(base, overview), total: doc.parts.length };
   }
 
   const matches = doc.parts
@@ -617,11 +621,12 @@ export async function searchKeyDocument(kind: KeyDocumentKind, query: string, li
   // When the exact phrase appears somewhere (like a code "GP-01"), loose word matches ("gp", "01") are noise.
   const chosen = matches.some((match) => match.exact) ? matches.filter((match) => match.exact) : matches;
 
-  return chosen
+  const found = chosen
     .sort((a, b) => b.score - a.score || a.index - b.index)
     .slice(0, limit)
     .sort((a, b) => a.index - b.index)
     .map((match) => ({ ...base, text: clip(doc.parts[match.index], 12_000) }));
+  return { found, total: chosen.length };
 }
 
 // ─── Reading a result ────────────────────────────────────────────────────
