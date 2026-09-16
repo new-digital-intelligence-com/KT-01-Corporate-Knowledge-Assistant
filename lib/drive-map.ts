@@ -88,14 +88,21 @@ export async function saveDriveMap(map: DriveMap): Promise<"postgres" | "file"> 
 
 /** The map as the assistant reads it before searching. */
 export function driveMapText(map: DriveMap): string {
+  // The more important a file, the more of its description is kept: the map is read with every question.
+  const detail: Record<number, [holds: number, useFor: number]> = { 3: [300, 160], 2: [170, 110], 1: [0, 90] };
   const files = [...map.key_files]
     .sort((a, b) => b.importance - a.importance)
-    .map(
-      (f) =>
-        `- ${f.name} (${f.type}; id ${f.id}; in ${f.path}; ${f.status}, edited ${f.modified}${f.maintained_by ? ` by ${f.maintained_by}` : ""}): ` +
-        `${clip(f.holds, 320)} Use for: ${clip(f.use_for, 200)}`,
-    );
-  const clients = map.clients.map((c) => `- ${c.folder} (folder id ${c.id}; last activity ${c.last_activity}): ${clip(c.engagement, 200)}`);
+    .map((f) => {
+      const [holds, useFor] = detail[f.importance] ?? detail[1];
+      const who = f.maintained_by ? ` by ${clip(f.maintained_by, 40)}` : "";
+      return (
+        `- ${f.name} (id ${f.id}; ${f.path.replace(/^NDI\//, "")}; ${f.status}, ${f.modified}${who}): ` +
+        `${holds ? `${clip(f.holds, holds)} ` : ""}Use for: ${clip(f.use_for, useFor)}`
+      );
+    });
+  const clients = map.clients.map(
+    (c) => `- ${c.folder.replace(/^NDI\/1 Client Projects\//, "")} (id ${c.id}; last ${c.last_activity}): ${clip(c.engagement, 150)}`,
+  );
   return [
     `How the company Drive is organised (map made on ${map.generated_at.slice(0, 10)}):`,
     map.overview_markdown.trim(),
