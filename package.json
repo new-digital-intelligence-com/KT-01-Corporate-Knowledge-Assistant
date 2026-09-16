@@ -10,7 +10,8 @@
     "sync": "tsx scripts/sync.ts",
     "typecheck": "tsc --noEmit",
     "chat-bot": "tsx scripts/chat-bot.ts",
-    "google-login": "tsx scripts/google-login.ts"
+    "google-login": "tsx scripts/google-login.ts",
+    "drive-map": "tsx scripts/drive-map.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",

@@ -46,6 +46,8 @@ export interface FinalAnswer {
   rewritten: boolean;
   /** How many company facts the check found fully backed (checks only lists the others). */
   supportedCount?: number;
+  /** The answer before the fact check changed it, for tracing; never shown in Chat. */
+  draft?: string;
 }
 
 export type AssistantEvent =

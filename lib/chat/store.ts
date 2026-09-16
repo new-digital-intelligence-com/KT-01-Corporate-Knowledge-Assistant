@@ -1,6 +1,5 @@
-import { Pool } from "pg";
-import { env } from "../config";
 import { getDb } from "../db";
+import { postgres } from "../postgres";
 import type { HistoryTurn } from "../types";
 
 // Conversation memory and delivery dedupe. A Postgres database (Supabase) when DATABASE_URL is set: it
@@ -13,25 +12,8 @@ import type { HistoryTurn } from "../types";
 
 type Turn = { conversation: string; asker: string | null; question: string; answer: string; status: string };
 
-let pool: Pool | undefined;
-
-function remote(): Pool | null {
-  const connectionString = env("DATABASE_URL");
-  if (!connectionString) return null;
-  // Serverless instances are short-lived: keep the pool small and let idle connections go. Supabase's
-  // transaction pooler doesn't keep prepared statements, which pg only creates for named queries.
-  pool ??= new Pool({
-    connectionString,
-    max: 3,
-    idleTimeoutMillis: 10_000,
-    connectionTimeoutMillis: 5_000,
-    ssl: { rejectUnauthorized: false },
-  });
-  return pool;
-}
-
 export function memoryBackend(): "postgres" | "sqlite" {
-  return remote() ? "postgres" : "sqlite";
+  return postgres() ? "postgres" : "sqlite";
 }
 
 let ready = false;
@@ -66,7 +48,7 @@ function local() {
  * handled or was answered, so a repeated delivery doesn't produce a second reply.
  */
 export async function claimEvent(id: string): Promise<boolean> {
-  const db = remote();
+  const db = postgres();
   if (db) {
     const res = await db.query("insert into chat_deliveries (id, status) values ($1, 'working') on conflict (id) do nothing", [id]);
     return res.rowCount === 1;
@@ -79,7 +61,7 @@ export async function claimEvent(id: string): Promise<boolean> {
 }
 
 export async function finishEvent(id: string): Promise<void> {
-  const db = remote();
+  const db = postgres();
   if (db) {
     await db.query("update chat_deliveries set status = 'done' where id = $1", [id]);
     return;
@@ -92,14 +74,14 @@ export async function finishEvent(id: string): Promise<void> {
  * run that stopped before replying. Releasing it lets Pub/Sub's redelivery be answered.
  */
 export async function releaseUnfinishedEvents(): Promise<number> {
-  const db = remote();
+  const db = postgres();
   if (db) return (await db.query("delete from chat_deliveries where status = 'working'")).rowCount ?? 0;
   return local().prepare("DELETE FROM chat_deliveries WHERE status = 'working'").run().changes;
 }
 
 /** The last few questions and answers in a thread, DM or space conversation, oldest first. */
 export async function conversationHistory(conversation: string, limit = 3): Promise<HistoryTurn[]> {
-  const db = remote();
+  const db = postgres();
   if (db) {
     const res = await db.query<HistoryTurn>(
       "select question, answer from chat_turns where conversation = $1 order by id desc limit $2",
@@ -114,7 +96,7 @@ export async function conversationHistory(conversation: string, limit = 3): Prom
 }
 
 export async function saveTurn(turn: Turn): Promise<void> {
-  const db = remote();
+  const db = postgres();
   if (db) {
     await db.query(
       "insert into chat_turns (conversation, asker, question, answer, status) values ($1, $2, $3, $4, $5)",

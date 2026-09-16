@@ -169,6 +169,76 @@ export async function searchDrive(query: string, limit: number): Promise<SearchR
   };
 }
 
+const FOLDER = "application/vnd.google-apps.folder";
+
+/** A Drive file or folder id from an id or a link (docs.google.com/…/d/<id>, drive.google.com/…/folders/<id>, ?id=<id>). */
+export function driveIdFrom(ref: string): string | null {
+  const text = ref.trim();
+  const fromLink = /\/(?:d|folders)\/([\w-]{20,})|[?&]id=([\w-]{20,})/.exec(text);
+  if (fromLink) return fromLink[1] ?? fromLink[2];
+  return /^[\w-]{20,}$/.test(text) ? text : null;
+}
+
+/** A Drive file or folder by id, as a result that can be read like a search result. */
+export async function driveItem(fileId: string): Promise<Found & { folder: boolean }> {
+  const f = (
+    await g().drive.files.get({
+      fileId,
+      supportsAllDrives: true,
+      fields: "id, name, mimeType, createdTime, modifiedTime, webViewLink, lastModifyingUser(displayName)",
+    })
+  ).data;
+  const folder = f.mimeType === FOLDER;
+  return {
+    docId: `drive:${fileId}`,
+    source: "drive",
+    title: f.name ?? fileId,
+    url: f.webViewLink ?? null,
+    container: "Google Drive",
+    author: null,
+    updatedAt: f.modifiedTime ?? "",
+    folder,
+    text: [
+      `${folder ? "Folder" : "File"} "${f.name}"${folder ? "" : ` (${FILE_KINDS[f.mimeType ?? ""] ?? f.mimeType ?? "file"})`}.`,
+      f.modifiedTime && `Last edited${f.lastModifyingUser?.displayName ? ` by ${f.lastModifyingUser.displayName}` : ""} on ${gmt(f.modifiedTime)}.`,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  };
+}
+
+/** What a folder holds: subfolders first, then files, newest first. */
+export async function listDriveFolder(folder: Found): Promise<Found[]> {
+  const folderId = folder.docId.slice("drive:".length);
+  const items: drive_v3.Schema$File[] = [];
+  let pageToken: string | undefined;
+  do {
+    const res = await g().drive.files.list({
+      q: `'${driveTerm(folderId)}' in parents and trashed = false`,
+      orderBy: "folder,modifiedTime desc",
+      pageSize: 500,
+      pageToken,
+      fields: "nextPageToken, files(id, name, mimeType, modifiedTime, lastModifyingUser(displayName))",
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+      corpora: "allDrives",
+    });
+    items.push(...(res.data.files ?? []));
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken && items.length < 2000);
+
+  const lines = items.map((f) =>
+    f.mimeType === FOLDER
+      ? `- folder "${f.name}" (id ${f.id})`
+      : `- "${f.name}" (${FILE_KINDS[f.mimeType ?? ""] ?? f.mimeType}; edited ${f.modifiedTime?.slice(0, 10)}${f.lastModifyingUser?.displayName ? ` by ${f.lastModifyingUser.displayName}` : ""}; id ${f.id})`,
+  );
+  const folders = items.filter((f) => f.mimeType === FOLDER).length;
+  return pieces(
+    { ...folder, docId: `drive-folder:${folderId}` },
+    `Folder "${folder.title}" holds ${folders} folder(s) and ${items.length - folders} file(s)${pageToken ? " (the first 2000 items)" : ", all listed"}. Open one with open_drive_file and its id.\n${lines.join("\n")}`,
+  );
+}
+
 /** A Drive file's bytes, exported to `exportAs` for Google files. */
 async function driveBytes(fileId: string, exportAs?: string): Promise<Uint8Array> {
   const res = exportAs
@@ -1111,6 +1181,8 @@ export interface KeyDocumentFilters {
   owner?: string;
   status?: string;
   domain?: string;
+  /** Rows without (or with) a demo video, by the tracker's video cell and the YouTube channel. */
+  demo_video?: "missing" | "present";
 }
 
 const KEY_DOCUMENTS: Record<KeyDocumentKind, { setting: string; label: string }> = {
@@ -1253,10 +1325,11 @@ export async function searchKeyDocument(
   const doc = await keyDocument(fileId);
   const base: Found = { docId: `key:${kind}:${fileId}`, source: "drive", title: doc.title, url: doc.url, container: label, author: null, updatedAt: doc.modified, text: "" };
   const overview = !query.trim() && !Object.values(filters).some((value) => value?.trim());
+  const videos = filters.demo_video && doc.rows.length && youtubeConfigured() ? await channelVideoLinks(doc).catch(() => undefined) : undefined;
   // The full lists also say how the two documents line up, so "how many catalog AI employees are tracked" has one citable answer.
   const comparison = overview ? await catalogTrackerComparison().catch(() => undefined) : undefined;
   return doc.rows.length
-    ? searchRows(doc, base, query.trim(), limit, filters, comparison)
+    ? searchRows(doc, base, query.trim(), limit, filters, comparison, videos)
     : searchSlides(doc, base, query.trim(), limit, comparison);
 }
 
@@ -1289,6 +1362,23 @@ function trackerLayout(doc: KeyDocument) {
     return key ? (row.fields[key] ?? "").replace(/\s+/g, " ").trim() : "";
   };
   return { main, columns, value };
+}
+
+/** Tracker ID → a video on the channel that names it in its title, description or tags (also written "[GP -15]"). */
+async function channelVideoLinks(tracker: KeyDocument): Promise<Map<string, string>> {
+  const { videos } = await channelVideos();
+  const { main, value } = trackerLayout(tracker);
+  const texts = videos.map((v) => ({ id: v.id, text: [v.snippet?.title, v.snippet?.description, ...(v.snippet?.tags ?? [])].join("\n") }));
+  const links = new Map<string, string>();
+  for (const row of tracker.rows.filter((r) => r.sheet === main.name)) {
+    const id = value(row, "ID");
+    const [letters, rest] = id.split("-");
+    if (!letters || !rest) continue;
+    const pattern = new RegExp(`\\b${letters}\\s?-?\\s?${rest}\\b`, "i");
+    const video = texts.find((v) => pattern.test(v.text));
+    if (video?.id) links.set(id, `https://youtu.be/${video.id}`);
+  }
+  return links;
 }
 
 /** How the catalog's AI employee codes and the tracker's IDs line up. */
@@ -1327,6 +1417,7 @@ function searchRows(
   limit: number,
   filters: KeyDocumentFilters,
   comparison?: string,
+  videos?: Map<string, string>,
 ): SearchResult {
   const { main, columns, value } = trackerLayout(doc);
   const compact = (row: SheetRow) => {
@@ -1358,6 +1449,24 @@ function searchRows(
     const text = wanted.replace(/^not\s+/i, "").toLowerCase();
     rows = rows.filter((row) => row.sheet === main.name && value(row, label).toLowerCase().includes(text) !== negate);
     conditions.push(`${label} ${negate ? "doesn't contain" : "contains"} “${text}”`);
+  }
+
+  if (filters.demo_video) {
+    // A video counts when the tracker links one or the channel has one naming the AI employee.
+    const cell = (row: SheetRow) => value(row, "Demo video");
+    const channel = (row: SheetRow) => videos?.get(value(row, "ID"));
+    const mainRows = rows.filter((row) => row.sheet === main.name);
+    const onlyChannel = mainRows.filter((row) => !cell(row) && channel(row));
+    const onlyCell = videos ? mainRows.filter((row) => cell(row) && !channel(row)) : [];
+    rows = mainRows.filter((row) => Boolean(cell(row) || channel(row)) === (filters.demo_video === "present"));
+    conditions.push(filters.demo_video === "present" ? "a demo video exists" : "no demo video exists");
+    if (!videos) hints.push("The YouTube channel couldn't be checked, so only the tracker's video cells were used.");
+    if (onlyChannel.length) {
+      hints.push(`Empty video cell in the tracker but a video on the channel: ${onlyChannel.map((row) => `${value(row, "ID")} (${channel(row)})`).join("; ")}.`);
+    }
+    if (onlyCell.length) {
+      hints.push(`Video linked in the tracker but no channel video names the ID (it may be unlisted or titled differently): ${onlyCell.map((row) => value(row, "ID")).join(", ")}.`);
+    }
   }
 
   let ranked = rows.map((row) => ({ row, score: 1 }));
@@ -1419,9 +1528,11 @@ function searchSlides(doc: KeyDocument, base: Found, query: string, limit: numbe
 
   if (!query) {
     const titleSlide = (doc.parts[0] ?? "").replace(/^Slide 1:\n/, "").replace(/\n/g, " / ");
+    const stated = Number(/(\d+)\s+AI employees/i.exec(titleSlide)?.[1]);
     const summary =
       `The catalog has ${doc.parts.length} slides and shows ${doc.codes.size} distinct AI employee codes, all listed below with their names and slides.` +
       (titleSlide ? ` Its title slide says: “${clip(titleSlide, 200)}”.` : "") +
+      (stated && stated !== doc.codes.size ? ` The title slide's figure (${stated}) differs from the ${doc.codes.size} codes on the slides.` : "") +
       (comparison ? ` ${comparison}` : "");
     return {
       found: listPassages(base, summary, [...doc.codes.keys()].map(describe)),
@@ -1465,7 +1576,7 @@ export function readLive(item: Found, focus?: string): Promise<Found[]> {
   if (item.docId.startsWith("gchat:")) return readChat(item);
   if (item.docId.startsWith("gspace:")) return readSpaceMessages(item.docId.slice("gspace:".length), item.container);
   // Everything else (directory, YouTube, key documents, calendar, results lists) is already complete.
-  if (/^(directory|youtube|key|calendar|list):/.test(item.docId)) return Promise.resolve([item]);
+  if (/^(directory|youtube|key|calendar|list|drive-folder):/.test(item.docId)) return Promise.resolve([item]);
   return Promise.reject(new Error("this result can't be opened"));
 }
 

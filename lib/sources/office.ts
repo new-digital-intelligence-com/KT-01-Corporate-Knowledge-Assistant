@@ -8,7 +8,11 @@ export interface SheetTable {
   rows: string[][];
 }
 
-/** Text of each slide in a .pptx, in presentation order. Hidden slides are marked. */
+/**
+ * Text of each slide in a .pptx, in presentation order. Hidden slides are marked. Section labels that sit
+ * just above a text box (often static text in the slide's layout, like "Integrations") are put right before
+ * that box, so lists keep their headings.
+ */
 export async function pptxSlides(bytes: Uint8Array): Promise<string[]> {
   const zip = await JSZip.loadAsync(bytes);
   const read = async (path: string) => (await zip.file(path)?.async("string")) ?? "";
@@ -22,16 +26,78 @@ export async function pptxSlides(bytes: Uint8Array): Promise<string[]> {
 
   return Promise.all(
     order.map(async (path) => {
-      const xml = await read(path);
-      const text = xml
-        .split(/<\/a:p>/)
-        .map((paragraph) => [...paragraph.matchAll(/<a:t(?:\s[^>]*)?>([^<]*)<\/a:t>/g)].map((m) => decodeXml(m[1])).join(""))
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .join("\n");
+      const [xml, slideRels] = await Promise.all([read(path), read(path.replace(/slides\/(slide\d+\.xml)$/, "slides/_rels/$1.rels"))]);
+      const layoutTarget = [...relationshipTargets(slideRels).values()].find((target) => target.includes("slideLayout"));
+      const layout = layoutTarget ? await read(`ppt/slideLayouts/${layoutTarget.split("/").pop()}`) : "";
+      const text = slideLines(xml, layout).join("\n");
       return /<p:sld\b[^>]*\bshow="0"/.test(xml) ? `(hidden slide)\n${text}` : text;
     }),
   );
+}
+
+interface SlideShape {
+  lines: string[];
+  x?: number;
+  y?: number;
+  placeholder: boolean;
+}
+
+// EMU distances: a label belongs to the box below it when they line up and the box starts soon after.
+const LABEL_MAX_X_SHIFT = 250_000;
+const LABEL_MAX_GAP = 800_000;
+
+function slideLines(xml: string, layoutXml: string): string[] {
+  // Text boxes in XML order; text outside them (tables, for example) stays where it is.
+  const parts: (SlideShape | string[])[] = [];
+  let last = 0;
+  for (const m of xml.matchAll(/<p:sp>[\s\S]*?<\/p:sp>/g)) {
+    parts.push(paragraphs(xml.slice(last, m.index)));
+    parts.push(shapeOf(m[0]));
+    last = m.index + m[0].length;
+  }
+  parts.push(paragraphs(xml.slice(last)));
+
+  const shapes = parts.filter((part): part is SlideShape => !Array.isArray(part) && part.lines.length > 0);
+  const isLabel = (s: SlideShape) =>
+    !s.placeholder && s.lines.length === 1 && s.lines[0].length <= 40 && !/[.:;!?]/.test(s.lines[0]) && s.y !== undefined;
+  const layoutLabels = [...layoutXml.matchAll(/<p:sp>[\s\S]*?<\/p:sp>/g)].map((m) => shapeOf(m[0])).filter(isLabel);
+  const labels = [...layoutLabels, ...shapes.filter(isLabel)];
+  const boxes = shapes.filter((s) => !isLabel(s) && s.y !== undefined);
+
+  const above = new Map<SlideShape, SlideShape[]>();
+  const moved = new Set<SlideShape>();
+  for (const label of labels) {
+    const below = boxes
+      .filter((box) => Math.abs(box.x! - label.x!) < LABEL_MAX_X_SHIFT && box.y! > label.y! && box.y! - label.y! < LABEL_MAX_GAP)
+      .sort((a, b) => a.y! - b.y!)[0];
+    if (!below) continue;
+    above.set(below, [...(above.get(below) ?? []), label].sort((a, b) => a.y! - b.y!));
+    moved.add(label);
+  }
+
+  return parts.flatMap((part) => {
+    if (Array.isArray(part)) return part;
+    if (moved.has(part)) return [];
+    return [...(above.get(part) ?? []).map((label) => label.lines[0]), ...part.lines];
+  });
+}
+
+function shapeOf(sp: string): SlideShape {
+  const offset = /<a:off\b[^>]*>/.exec(sp)?.[0];
+  return {
+    lines: paragraphs(sp),
+    x: offset ? Number(attr(offset, "x")) : undefined,
+    y: offset ? Number(attr(offset, "y")) : undefined,
+    placeholder: /<p:ph\b/.test(sp),
+  };
+}
+
+function paragraphs(xml: string): string[] {
+  return xml
+    .split(/<\/a:p>/)
+    .map((paragraph) => [...paragraph.matchAll(/<a:t(?:\s[^>]*)?>([^<]*)<\/a:t>/g)].map((m) => decodeXml(m[1])).join(""))
+    .map((line) => line.trim())
+    .filter(Boolean);
 }
 
 /** Every sheet of an .xlsx as rows of display values. Dates come out as dates, not serial numbers. */
