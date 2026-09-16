@@ -51,7 +51,8 @@ interface Research {
 export class AssistantError extends Error {}
 
 const MAX_TOOL_ROUNDS = 10;
-const MARKER = /\[#(\d+)\]/g;
+// [#123], or a bare long id like [900000008]: the model sometimes drops the "#". Short numbers like [2026] are left alone.
+const MARKER = /\[#(\d+)\]|\[(\d{5,})\]/g;
 // Live results get ids far above indexed passage ids, so the two never collide.
 const LIVE_ID_START = 900_000_000;
 
@@ -333,7 +334,7 @@ How to work:
 - Decide whether the question involves the company: its AI employees, projects, clients, people, teams, groups, documents, decisions or anything that happened internally. If it does, search the company sources before answering, even when you think you know: short keyword queries in the sources that fit, then open the most relevant results with read_result and base company facts on what you read.
 - Words like "this", "here", "this AI employee" or "this project" usually refer to the topic of the space you were asked in. Use the space name, and read its recent messages when that helps.${keyDocuments}
 - If the question doesn't need company information (general knowledge, how-to, writing, brainstorming, opinions on a general topic), answer directly without searching.
-- Cite company facts: put markers like [#123] right after each sentence that states something about the company, using ids from tool results, and only ids a tool returned in this conversation. Your own reasoning, opinions, general knowledge and suggestions don't get markers.
+- Cite company facts: put markers written exactly like [#123] (always with the #) right after each sentence that states something about the company, using ids from tool results, and only ids a tool returned in this conversation. Your own reasoning, opinions, general knowledge and suggestions don't get markers.
 - Never present guesses about the company as facts. If the sources don't cover something company-specific, say so plainly, then still help as far as you can and make clear which part is your own view.
 - When asked for your opinion or an assessment, give a genuine, specific one: strengths, weaknesses, risks and concrete suggestions, grounded in what you found.
 - Before stating how many of something there are, make sure you have the complete list: tool results say how many items matched, and when only part is shown, fetch the rest first. Make every count you state match the items you list.
@@ -711,8 +712,8 @@ function finalize(draft: string, check: Verification, passages: Passages, rewrit
   const citations: Citation[] = [];
 
   const text = draft
-    .replace(MARKER, (_, raw: string) => {
-      const id = Number(raw);
+    .replace(MARKER, (_, hashed?: string, bare?: string) => {
+      const id = Number(hashed ?? bare);
       const passage = passages.get(id);
       if (!passage) return "";
       if (!numbers.has(passage.docId)) {
@@ -732,6 +733,8 @@ function finalize(draft: string, check: Verification, passages: Passages, rewrit
       return `[${numbers.get(passage.docId)}]`;
     })
     .replace(/(\[\d+\])\1+/g, "$1")
+    // Safety net: a passage id must never reach the reader as plain text.
+    .replace(/\s?\[\d{5,}\]/g, "")
     .trim();
 
   const unbacked = check.claims.filter((c) => c.verdict !== "supported").length;
@@ -750,12 +753,12 @@ function formatPassage(p: ChunkRow, maxChars: number): string {
 }
 
 function citedIds(text: string): number[] {
-  return [...new Set([...text.matchAll(MARKER)].map((m) => Number(m[1])))];
+  return [...new Set([...text.matchAll(MARKER)].map((m) => Number(m[1] ?? m[2])))];
 }
 
 /** Code-level check: a citation must point at something a tool actually returned. */
 function keepKnownMarkers(text: string, passages: Passages): string {
-  return text.replace(MARKER, (marker, id: string) => (passages.has(Number(id)) ? marker : ""));
+  return text.replace(MARKER, (marker, hashed?: string, bare?: string) => (passages.has(Number(hashed ?? bare)) ? marker : ""));
 }
 
 function stripMarkers(text: string): string {
