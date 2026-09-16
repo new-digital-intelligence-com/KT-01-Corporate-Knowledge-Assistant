@@ -1,0 +1,9 @@
+# Never put local secrets, the local database or build output into the image.
+.env*
+!.env.example
+secrets/
+data/
+node_modules/
+.next/
+.vercel/
+.git/

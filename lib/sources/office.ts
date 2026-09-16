@@ -86,17 +86,37 @@ export async function xlsxSheets(bytes: Uint8Array): Promise<SheetTable[]> {
  * least two filled cells as the header. Empty rows are dropped.
  */
 export function sheetRecords(table: SheetTable): string[] {
+  return sheetRows(table).map((row) => row.text);
+}
+
+export interface SheetRow {
+  sheet: string;
+  row: number;
+  /** Column header → display value; empty cells are left out. */
+  fields: Record<string, string>;
+  text: string;
+}
+
+/** The rows of a sheet with their values keyed by column header, and the same record as text. */
+export function sheetRows(table: SheetTable): SheetRow[] {
   const headerAt = table.rows.findIndex((row) => row.filter(Boolean).length >= 2);
   if (headerAt < 0) return [];
   const header = table.rows[headerAt];
-  const records: string[] = [];
+  const rows: SheetRow[] = [];
   table.rows.slice(headerAt + 1).forEach((row, i) => {
-    const fields = row
-      .map((value, col) => (value ? `${header[col] || columnName(col)}: ${value}` : ""))
-      .filter(Boolean);
-    if (fields.length) records.push(`Sheet "${table.name}" · Row ${headerAt + i + 2}: ${fields.join(" | ")}`);
+    const fields: Record<string, string> = {};
+    row.forEach((value, col) => {
+      if (!value) return;
+      const name = header[col] || columnName(col);
+      // Percent columns hold fractions ("0.9"); show them the way the sheet does ("90%").
+      fields[name] = name.includes("%") && /^(0(\.\d+)?|1(\.0+)?)$/.test(value) ? `${Math.round(Number(value) * 100)}%` : value;
+    });
+    const entries = Object.entries(fields);
+    if (!entries.length) return;
+    const number = headerAt + i + 2;
+    rows.push({ sheet: table.name, row: number, fields, text: `Sheet "${table.name}" · Row ${number}: ${entries.map(([k, v]) => `${k}: ${v}`).join(" | ")}` });
   });
-  return records;
+  return rows;
 }
 
 export function spreadsheetText(tables: SheetTable[]): string {

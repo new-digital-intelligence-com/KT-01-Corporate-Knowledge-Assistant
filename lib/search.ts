@@ -23,6 +23,17 @@ export function keywords(query: string, max = 12): string[] {
   return [...new Set(terms.filter((t) => t.length > 1 && !STOPWORDS.has(t)))].slice(0, max);
 }
 
+/** AI employee codes in a query, written "GP-01" or "gp01", as "GP-01". */
+export function employeeCodes(query: string): string[] {
+  return [...new Set([...query.matchAll(/\b([A-Za-z]{2})-?(\d{2})([a-z]?)\b/g)].map((m) => `${m[1].toUpperCase()}-${m[2]}${m[3]}`))];
+}
+
+/** Matches one code in text, with or without its dash, as a whole word. */
+export function codePattern(code: string, flags = "i"): RegExp {
+  const [letters, rest] = code.split("-");
+  return new RegExp(`\\b${letters}-?${rest}\\b`, flags);
+}
+
 export function searchChunks(query: string, sources: Source[] | undefined, limit: number): ChunkRow[] {
   const match = toMatchQuery(query);
   if (!match) return [];

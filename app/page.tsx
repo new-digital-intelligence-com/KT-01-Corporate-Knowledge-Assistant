@@ -273,9 +273,14 @@ function AnswerView({ answer, turn }: { answer: FinalAnswer; turn: Turn }) {
               );
             })}
           </ul>
-        ) : (
-          <p>No factual statements to check.</p>
-        )}
+        ) : null}
+        <p>
+          {answer.supportedCount
+            ? `${answer.supportedCount} company fact(s) fully backed by the sources${answer.checks.length ? "; the statements above were not." : "."}`
+            : answer.checks.length
+              ? null
+              : "No company facts to check."}
+        </p>
         {answer.rewritten && (
           <p>The first draft contained statements the sources didn&apos;t back, so it was rewritten and checked again.</p>
         )}

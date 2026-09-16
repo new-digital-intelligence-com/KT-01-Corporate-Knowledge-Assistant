@@ -44,6 +44,8 @@ export interface FinalAnswer {
   conflicts: string[];
   /** True when the first draft failed the check and was rewritten. */
   rewritten: boolean;
+  /** How many company facts the check found fully backed (checks only lists the others). */
+  supportedCount?: number;
 }
 
 export type AssistantEvent =
@@ -60,6 +62,8 @@ export interface AskContext {
   asker?: string;
   /** The messages of the thread the question was asked in, oldest first. */
   threadMessages?: string;
+  /** The Google account the live tools read as (Gmail, Chat, Calendar). */
+  account?: string;
 }
 
 export interface HistoryTurn {
