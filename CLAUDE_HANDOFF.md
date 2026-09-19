@@ -111,9 +111,10 @@ The JSON shape is `DriveMap` in `lib/drive-map.ts`. The map was built on 2026-09
 - Behaviour testing: write a small tsx script outside the repo that loads env with `@next/env`, calls `answerQuestion(question, [], emit, undefined, { spaceType: "DIRECT_MESSAGE", asker: "Helmi Lakhder" })`, and prints the progress events and `renderAnswer(answer).text`. Run questions that hit each source.
 - Three QA rounds on 32 questions (2026-09-16): run 1 had 6 good answers and 6 with major issues; run 3 had 20 good and 0 major; the median answer time fell from 48 s to 16 s.
 
-## State (2026-09-17)
+## State (2026-09-19)
 
-**Done and live** (last deployed commit `3abbdba`):
+**Done and live:**
+- Hosting moved to the new Vercel account (2026-09-19). The old project was deleted, the Chat app's HTTP endpoint URL now points at the new URL, and a real Chat message was answered from it.
 - Live search across every source.
 - Complete lists: tracker, catalog, YouTube, directory.
 - Fact check with date, asker and related passages.
