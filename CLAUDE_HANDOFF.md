@@ -88,12 +88,11 @@ The JSON shape is `DriveMap` in `lib/drive-map.ts`. The map was built on 2026-09
 
 ## Hosting and deploy
 
-- **Production:** Vercel project `kt-01-corporate-knowledge-assistant` (team `team_j2liDA1o1xut25GwXWxsxtTL`, project `prj_kZYkLFYuQgt9GGJ550c2Pf81syTf`), URL https://kt-01-corporate-knowledge-assistant.vercel.app.
+- **Production:** Vercel project `kt-01-corporate-knowledge-assistant` on the `er` team (team `team_lCL2eN4x0WgeW4BClQl4aeYZ`, project `prj_oSWoJrQcFegc8bAKQL8zLBBY0a3F`), URL https://kt-01-corporate-knowledge-assistant-pi.vercel.app. The Vercel account is Helmi's work Google account, `helmi.lakhder@new-digital-intelligence.com`. Moved here on 2026-09-19 from the old personal account `helmipaty@gmail.com` (team `team_j2liDA1o1xut25GwXWxsxtTL`), which can be retired.
   - The Google Chat app (GCP project `knowledge-assistant-508709`) uses "HTTP endpoint URL" = `…/api/google-chat`.
-- **GitHub:** `new-digital-intelligence-com/KT-01-Corporate-Knowledge-Assistant`, now **private**. Vercel's Hobby plan cannot auto-deploy a private org repo, so **after every push, deploy from this machine**:
+- **GitHub:** `new-digital-intelligence-com/KT-01-Corporate-Knowledge-Assistant`, now **public**, and the Vercel project is connected to it. A push to `main` deploys by itself; no manual step. To deploy by hand anyway:
   ```
-  VERCEL_ORG_ID=team_j2liDA1o1xut25GwXWxsxtTL VERCEL_PROJECT_ID=prj_kZYkLFYuQgt9GGJ550c2Pf81syTf \
-    npx vercel deploy --prod --yes --token "$VERCEL_TOKEN" --scope helmidev03s-projects
+  npx vercel deploy --prod --yes --token "$VERCEL_TOKEN"
   ```
   `VERCEL_TOKEN` is in `.env.local`. Read it without printing it. `.vercelignore` keeps secrets and data out.
 - **Production env vars** are set in Vercel (names only):
@@ -101,10 +100,13 @@ The JSON shape is `DriveMap` in `lib/drive-map.ts`. The map was built on 2026-09
   - Google and Chat: `CHAT_BOT_KEY_JSON`, `GOOGLE_OAUTH_CLIENT_JSON`, `GOOGLE_USER_TOKEN_JSON`, `GOOGLE_DRIVE_ID`, `CHAT_ALLOWED_DOMAINS`, `CHAT_ENDPOINT_URL`, `CHAT_ADDON_SERVICE_ACCOUNT`, `WEB_CHAT_ENABLED=false`.
   - Sources and storage: `YOUTUBE_CHANNEL`, `AI_CATALOG_FILE_ID`, `AI_TRACKER_FILE_ID`, `DATABASE_URL`.
   - The calendar zone defaults to GMT (`CALENDAR_TIME_ZONE`).
+  - Store them as **encrypted**, never as Vercel's "sensitive" type. Sensitive values can never be read back — not by the API, the CLI or the dashboard — so the old project's credentials were unrecoverable and had to be made again from Google.
 - **Google sign-in:** if the user OAuth token expires or scopes change, run `npm run google-login` and send the user the link. They paste back the redirect URL, which you pipe into the script. Then update `GOOGLE_USER_TOKEN_JSON` in Vercel.
+- **Local `secrets/`** (gitignored, on this machine only, rebuilt 2026-09-19): `google-oauth-client.json` is the Desktop OAuth client from GCP → Credentials (loopback `http://127.0.0.1:53682`); `google-service-account.json` is a key for `knowledge-assistant-bot@knowledge-assistant-508709.iam.gserviceaccount.com`; `google-user-token.json` comes from `npm run google-login`, signed in as `helmi.lakhder@new-digital-intelligence.com`.
 
 ## Checking changes
 
+- `npm install` fails on this machine: `better-sqlite3` is compiled with node-gyp and the installed Visual Studio has no Windows SDK. Use `npm install --ignore-scripts`. Everything works except the local SQLite fallback, which production never uses (`DATABASE_URL` points at Supabase).
 - `npx tsc --noEmit` and `npx eslint lib scripts app`. There is no test suite.
 - Behaviour testing: write a small tsx script outside the repo that loads env with `@next/env`, calls `answerQuestion(question, [], emit, undefined, { spaceType: "DIRECT_MESSAGE", asker: "Helmi Lakhder" })`, and prints the progress events and `renderAnswer(answer).text`. Run questions that hit each source.
 - Three QA rounds on 32 questions (2026-09-16): run 1 had 6 good answers and 6 with major issues; run 3 had 20 good and 0 major; the median answer time fell from 48 s to 16 s.
