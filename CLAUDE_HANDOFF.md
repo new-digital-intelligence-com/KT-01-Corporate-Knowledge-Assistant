@@ -1,10 +1,12 @@
 # Claude handoff: KT-01 Corporate Knowledge Assistant
 
-Read this first when you pick up this project in a new session. It records what the project is, how it runs, the decisions already taken, and what is left. Last updated: 2026-09-17.
+Read this first when you pick up this project in a new session. It records what the project is, how it runs, the decisions already taken, and what is left. Last updated: 2026-10-17.
 
 ## What it is
 
 A Google Chat app for NDI (New Digital Intelligence, new-digital-intelligence.com), called "Knowledge Assistant". It is Claude plus live, **read-only** access to the company's Google sources. Anyone in the company can ask it anything, in a direct message or by @mentioning it in a space. It answers general questions directly. For company questions it searches the sources, cites them, and fact-checks the answer before posting.
+
+It has two engines. The **built-in pipeline** (`lib/assistant.ts`) answers everyone today. The **Managed Agent** (`lib/agent/`, see below) is where the project is going: a Claude Managed Agent built like Claude Cowork or Claude Tag in Slack, with connectors for its tools. It is switched on per person with `AGENT_TRIAL_USERS`, or for everyone with `ASSISTANT_ENGINE=agent`.
 
 The owner is Helmi Lakhder. The bot reads everything as his Google account.
 
@@ -21,6 +23,13 @@ The owner is Helmi Lakhder. The bot reads everything as his Google account.
   - The only safeguards are: company domain only (`CHAT_ALLOWED_DOMAINS`), no answers in spaces that allow external people, and never repeating credentials.
   - Keep the stack: Next.js/TypeScript. The user chose it over Python/FastAPI/LangGraph.
   - LinkedIn integration is parked.
+  - **The Managed Agent design (decided 2026-10-16):**
+    - Every source comes through a connector (MCP server), like in Claude Cowork. Don't rebuild what a connector already does.
+    - **Fireflies:** Fireflies' own MCP server (`https://api.fireflies.ai/mcp`), signed in with Michael Burian's account. The rule that a meeting is only for the people invited to it lives in the agent's prompt; the user chose that over a hard check in code.
+    - **Gmail, Calendar and Chat: per person.** Each asker connects their own Google account once, and the agent reads only theirs, Chat included (so it can always read the conversation it's asked in).
+    - **Drive and Sheets:** one account (Helmi's), kept to the NDI shared drive by the prompt.
+    - **Catalog, tracker and YouTube demo links** are read straight from their Drive files (the YouTube links are in a master database sheet), not through special tools. The directory stays one of our own tools: no connector exists for it.
+    - Only read tools are switched on in every connector. Fireflies' and Google's servers can also change things (share, move, send); those stay off.
 - Answer style the user asked for:
   - English unless another language is requested.
   - Sources in a collapsible "Sources (n)" card.
@@ -36,7 +45,10 @@ Next.js 16 (read `node_modules/next/dist/docs` before changing Next code; see AG
 | Path | Role |
 |---|---|
 | `app/api/google-chat/route.ts` | Chat add-on HTTP endpoint. Verifies the Google ID token (audience `CHAT_ENDPOINT_URL`, email `CHAT_ADDON_SERVICE_ACCOUNT`), returns `{}` at once, and handles the event in `after()`. |
-| `lib/chat/bot.ts` | Event handling: domain and external-space checks, posts a placeholder, reads the thread and memory, calls `answerQuestion`, edits the placeholder with the answer. |
+| `lib/chat/bot.ts` | Event handling: domain and external-space checks, posts a placeholder, reads the thread and memory, calls `answerQuestion` (or the Managed Agent, for trial users or with `ASSISTANT_ENGINE=agent`), edits the placeholder with the answer. |
+| `lib/agent/session.ts` | The Managed Agent's runtime: one session per conversation and person, kept in Postgres (`agent_sessions`). It sends the question, runs our tools when the agent calls them, and returns the answer, catching up after a dropped stream. |
+| `lib/agent/tools.ts` | The agent's own tools, run in our code as Helmi's account: `search_drive`, `read_drive_file`, `search_people`, `search_groups`, `list_group_members`. |
+| `lib/agent/prompt.ts`, `scripts/managed-agent.ts` | The agent's rules, and the setup script (`npm run managed-agent`) that creates or updates the agent with the rules plus the Drive map's key files. |
 | `lib/chat/render.ts`, `client.ts` | Chat message and card rendering; posting and editing as the bot service account (chat.bot scope), with retries. |
 | `lib/chat/store.ts`, `lib/postgres.ts` | Conversation memory and delivery dedupe in Supabase Postgres (`DATABASE_URL`), with a SQLite fallback. |
 | `lib/assistant.ts` | The answer pipeline: tool definitions, system prompt, tool loop, fact check, rewrite, final citation formatting. |
@@ -86,6 +98,26 @@ The bot re-reads the map every 10 minutes and puts it in the system prompt (abou
 
 The JSON shape is `DriveMap` in `lib/drive-map.ts`. The map was built on 2026-09-16 by listing the whole drive and reading the key files. Refresh it by hand when the drive changes a lot.
 
+### Managed Agent
+
+Anthropic runs the agent loop; our code only bridges Google Chat and runs our own tools. The TypeScript SDK (0.125) has it under `client.beta.{agents,environments,sessions,vaults}`.
+- **Resources** in the Anthropic workspace of `ANTHROPIC_API_KEY`, created 2026-10-16:
+  - agent `agent_01ELBePtUXGydeRpFcj7mUuJ` ("NDI Knowledge Assistant", `claude-opus-5-5`, effort medium);
+  - environment `env_01DzNSSKGnSf1YFLqWRq6pMy` (cloud, limited networking, MCP servers allowed; no sandbox tools);
+  - vault `vlt_011Cg6jEMrVRfz13866ECxRn`, holding Michael's Fireflies key as a static bearer credential.
+- **Update the agent:** edit `lib/agent/prompt.ts` or `lib/agent/tools.ts`, then run `npm run managed-agent`. Each run makes a new agent version; new sessions use the latest. The prompt holds the Drive map's important files as they were when the script ran, so run it again after the map changes.
+- **Tools:**
+  - Fireflies' read tools only (`fireflies_search`, `fireflies_fetch`, `fireflies_get_transcripts`, …). Its sharing, moving, renaming and privacy tools are off.
+  - Our custom tools from `lib/agent/tools.ts`. Each call pauses the session until `askAgent` sends the result back.
+- **Sessions:** one per conversation and person, kept in `agent_sessions` (conversation, asker, session_id). It holds the whole conversation, so follow-ups work without our own memory. Sessions and their history stay in the Console (Managed Agents → Sessions), which is the place to debug an answer.
+- **Tests on 2026-10-16** (run as Helmi in a DM):
+  - catalog question 20 s;
+  - pricing file and its owners 21 s;
+  - group members 10 s;
+  - meeting summary 15 s;
+  - follow-up answered from memory 6 s;
+  - a made-up colleague got no meeting content.
+
 ## Hosting and deploy
 
 - **Production:** Vercel project `kt-01-corporate-knowledge-assistant` on the `er` team (team `team_lCL2eN4x0WgeW4BClQl4aeYZ`, project `prj_oSWoJrQcFegc8bAKQL8zLBBY0a3F`), URL https://kt-01-corporate-knowledge-assistant-pi.vercel.app. The Vercel account is Helmi's work Google account, `helmi.lakhder@new-digital-intelligence.com`. Moved here on 2026-09-19 from the old personal account `helmipaty@gmail.com` (team `team_j2liDA1o1xut25GwXWxsxtTL`), which can be retired.
@@ -99,6 +131,7 @@ The JSON shape is `DriveMap` in `lib/drive-map.ts`. The map was built on 2026-09
   - Claude: `ANTHROPIC_API_KEY`.
   - Google and Chat: `CHAT_BOT_KEY_JSON`, `GOOGLE_OAUTH_CLIENT_JSON`, `GOOGLE_USER_TOKEN_JSON`, `GOOGLE_DRIVE_ID`, `CHAT_ALLOWED_DOMAINS`, `CHAT_ENDPOINT_URL`, `CHAT_ADDON_SERVICE_ACCOUNT`, `WEB_CHAT_ENABLED=false`.
   - Sources and storage: `YOUTUBE_CHANNEL`, `AI_CATALOG_FILE_ID`, `AI_TRACKER_FILE_ID`, `DATABASE_URL`.
+  - Managed Agent: `MA_AGENT_ID`, `MA_ENVIRONMENT_ID`, `MA_FIREFLIES_VAULT_ID`, plus `AGENT_TRIAL_USERS` (emails that get the agent) or `ASSISTANT_ENGINE=agent` (everyone). `FIREFLIES_API_KEY` is only needed where `npm run managed-agent` runs.
   - The calendar zone defaults to GMT (`CALENDAR_TIME_ZONE`).
   - Store them as **encrypted**, never as Vercel's "sensitive" type. Sensitive values can never be read back — not by the API, the CLI or the dashboard — so the old project's credentials were unrecoverable and had to be made again from Google.
 - **Google sign-in:** if the user OAuth token expires or scopes change, run `npm run google-login` and send the user the link. They paste back the redirect URL, which you pipe into the script. Then update `GOOGLE_USER_TOKEN_JSON` in Vercel.
@@ -107,11 +140,16 @@ The JSON shape is `DriveMap` in `lib/drive-map.ts`. The map was built on 2026-09
 ## Checking changes
 
 - `npm install` fails on this machine: `better-sqlite3` is compiled with node-gyp and the installed Visual Studio has no Windows SDK. Use `npm install --ignore-scripts`. Everything works except the local SQLite fallback, which production never uses (`DATABASE_URL` points at Supabase).
-- `npx tsc --noEmit` and `npx eslint lib scripts app`. There is no test suite.
+- `npx tsc --noEmit` and `npx eslint lib scripts app`. There is no test suite. On a fresh clone, run `npx next typegen` first, or `tsc` can't find Next's generated `LayoutProps` type.
+- Managed Agent: write a small tsx script outside the repo that loads env with `@next/env` and calls `askAgent({ conversation, asker, prompt, onProgress })` from `lib/agent/session.ts`, with a `<context>` block in the prompt like `agentContext()` in `lib/chat/bot.ts` builds. Use a fresh `conversation` string per test so earlier turns don't carry over.
 - Behaviour testing: write a small tsx script outside the repo that loads env with `@next/env`, calls `answerQuestion(question, [], emit, undefined, { spaceType: "DIRECT_MESSAGE", asker: "Helmi Lakhder" })`, and prints the progress events and `renderAnswer(answer).text`. Run questions that hit each source.
 - Three QA rounds on 32 questions (2026-09-16): run 1 had 6 good answers and 6 with major issues; run 3 had 20 good and 0 major; the median answer time fell from 48 s to 16 s.
 
-## State (2026-09-19)
+## State (2026-10-17)
+
+**Managed Agent: built and tested locally, not deployed yet.**
+- Working: Fireflies through its own connector, Drive and directory through our tools, the Chat bridge with trial mode, and memory per conversation.
+- Next: a trial in production for Helmi only (`AGENT_TRIAL_USERS`). Then per-person Gmail, Calendar and Chat, then Google's connectors.
 
 **Done and live:**
 - Hosting moved to the new Vercel account (2026-09-19). The old project was deleted, the Chat app's HTTP endpoint URL now points at the new URL, and a real Chat message was answered from it.
@@ -132,7 +170,7 @@ The JSON shape is `DriveMap` in `lib/drive-map.ts`. The map was built on 2026-09
    - The GCP project `knowledge-assistant-508709` has no billing account, so Cloud Run, Cloud Build, Artifact Registry and Secret Manager can't be enabled.
    - Helmi is Owner of the project, but can't see any billing account and isn't an org admin.
    - The user is sorting it out with the company (super admin, e.g. Michael Burian) or a card.
-   - gcloud is installed at `~/google-cloud-sdk` and signed in as Helmi.
+   - gcloud is no longer on this machine (checked 2026-09-19); install it again before this step.
    - Plan once billing exists:
      1. Enable the four APIs.
      2. Put the secrets in Secret Manager.
@@ -142,10 +180,16 @@ The JSON shape is `DriveMap` in `lib/drive-map.ts`. The map was built on 2026-09
 2. **Slow broad questions.** "Which client projects were active in 2026" takes about 2.5 minutes because the bot opens many folders. Consider a faster route, e.g. letting it trust the map's client list.
 3. **Drive map upkeep.** It is a manual snapshot, and new key files won't appear until it is refreshed.
 4. **LinkedIn:** parked by the user.
+5. **Google's connectors need preview access.** Google's official MCP servers for Drive (`drivemcp.googleapis.com`), Gmail (`gmailmcp`), Calendar (`calendarmcp`) and Chat (`chatmcp`, all `…googleapis.com/mcp/v1`) are in the Google Workspace Developer Preview Program. Helmi has to apply with the GCP project `knowledge-assistant-508709`. They also need a new OAuth client of type "Web application" marked for an AI agent; Google says it will reject other clients from 2026-11-11. Until access is granted, our own Drive tools fill in.
+6. **Per-person sign-in** for Gmail, Calendar and Chat isn't built yet. It needs that new OAuth client, a "connect your Google account" link from the bot, and each person's sign-in stored in their own vault. Sessions then attach the asker's vault.
+7. **Master database sheet:** the user said a master database sheet holds each AI employee's YouTube link. Ask which file it is, and make sure the agent's prompt names it.
+8. **The meeting feature built on 2026-09-23** (a hard invite check in code, private replies in spaces) was replaced by this design before it went live. It is kept in `git stash` ("2026-09-23 meeting feature").
 
 ## Gotchas
 
 - The NDI Tools sheet and Corporate Information sheet live **outside** the NDI shared drive, so Drive search (limited to `GOOGLE_DRIVE_ID`) won't find them. Open them by id; they are in the Drive map.
 - Vercel functions: `maxDuration = 300` on the Chat route. The answer runs in `after()`.
 - Chat allows about 1 write per second per space. Replies are capped at about 30 KB.
+- The production `ANTHROPIC_API_KEY` was replaced on 2026-10-12. Keep `.env.local` on the same key: the Managed Agent's resources live in that key's workspace, so a key from another workspace can't see them.
+- `askAgent` gives up after 240 s and interrupts the session, to stay inside Vercel's 300 s.
 - Never commit Drive file names or ids, client details or anything from `data/` or `secrets/`.

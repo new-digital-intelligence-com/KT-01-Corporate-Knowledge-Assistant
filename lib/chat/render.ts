@@ -1,5 +1,5 @@
 import type { chat_v1 } from "googleapis";
-import { clip } from "../text";
+import { clip, hideSecrets } from "../text";
 import { SOURCE_LABELS, type Citation, type FinalAnswer } from "../types";
 
 /** A Chat message: text, plus cards for anything that needs layout (like a collapsible list). */
@@ -45,6 +45,13 @@ export function renderAnswer(answer: FinalAnswer): ChatReply {
       },
     ],
   };
+}
+
+/** The Managed Agent's answer as Chat text: markdown links become Chat links and **bold** Chat bold. */
+export function renderAgentReply(text: string): string {
+  return plain(hideSecrets(text))
+    .replace(/\*\*([^*\n]+)\*\*/g, "*$1*")
+    .replace(/\[([^\]\n]+)\]\((https:\/\/[^\s)<>|"]+)\)/g, (_, label: string, url: string) => `<${url}|${label.replace(/[|‹›]/g, "")}>`);
 }
 
 export function renderProgress(message: string): string {

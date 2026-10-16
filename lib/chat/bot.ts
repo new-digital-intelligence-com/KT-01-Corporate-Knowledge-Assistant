@@ -1,10 +1,11 @@
+import { AgentError, agentConfigured, askAgent } from "../agent/session";
 import { answerQuestion, describeAssistantError } from "../assistant";
-import { envList } from "../config";
+import { env, envList } from "../config";
 import { liveGoogleAvailable, threadMessages } from "../live";
-import { clip, errorMessage } from "../text";
+import { clip, errorMessage, gmt } from "../text";
 import type { AssistantEvent, FinalAnswer, HistoryTurn } from "../types";
 import { editMessage, getSpace, msSinceLastWrite, postMessage } from "./client";
-import { plain, renderAnswer, renderProgress } from "./render";
+import { plain, renderAgentReply, renderAnswer, renderProgress } from "./render";
 import { claimEvent, conversationHistory, finishEvent, saveTurn } from "./store";
 
 /** The parts of a Google Workspace add-on event for Chat that the bot reads. */
@@ -155,6 +156,15 @@ export async function handleEvent(event: ChatEvent, deliveryId: string, log: Log
   const placeholder = await postMessage(space, renderProgress("Thinking…"), thread);
   openPlaceholders.add(placeholder);
 
+  if (agentEnabled(chat.user?.email)) {
+    try {
+      await withSlot(() => answerWithAgent({ event, space, thread, conversation, placeholder, eventId, question, log }));
+    } finally {
+      openPlaceholders.delete(placeholder);
+    }
+    return;
+  }
+
   try {
     await withSlot(async () => {
       let answer: FinalAnswer | undefined;
@@ -203,4 +213,77 @@ export async function handleEvent(event: ChatEvent, deliveryId: string, log: Log
   } finally {
     openPlaceholders.delete(placeholder);
   }
+}
+
+/**
+ * ASSISTANT_ENGINE=agent hands every question to the Managed Agent. For a try-out, AGENT_TRIAL_USERS lists the people
+ * who get it while everyone else keeps the built-in pipeline.
+ */
+function agentEnabled(email: string | undefined): boolean {
+  if (!agentConfigured()) return false;
+  if (env("ASSISTANT_ENGINE") === "agent") return true;
+  const trial = envList("AGENT_TRIAL_USERS").map((e) => e.toLowerCase());
+  return Boolean(email && trial.includes(email.toLowerCase()));
+}
+
+/** Who is asking, where, and when: the agent's rules depend on it (meetings stay out of spaces). */
+function agentContext(event: ChatEvent): string {
+  const user = event.chat?.user;
+  const space = event.chat?.messagePayload?.space;
+  const now = new Date();
+  const who = user?.email ? `${user.displayName || user.email} <${user.email}>` : (user?.displayName ?? "unknown");
+  const where =
+    space?.spaceType === "DIRECT_MESSAGE"
+      ? "Asked in a direct message with the assistant."
+      : `Asked in the Google Chat space "${space?.displayName || space?.name}"; everyone in it reads your answer.`;
+  return [
+    "<context>",
+    `Now: ${now.toLocaleDateString("en-GB", { weekday: "long", timeZone: "UTC" })} ${gmt(now.toISOString())}.`,
+    `Asked by: ${who}.`,
+    where,
+    "</context>",
+  ].join("\n");
+}
+
+async function answerWithAgent(a: {
+  event: ChatEvent;
+  space: string;
+  thread: string | null;
+  conversation: string;
+  placeholder: string;
+  eventId: string;
+  question: string;
+  log: Log;
+}): Promise<void> {
+  let lastEdit = Date.now();
+  let edits: Promise<void> = Promise.resolve();
+  const progress = (message: string) => {
+    if (Date.now() - lastEdit < PROGRESS_EVERY_MS || msSinceLastWrite(a.space) < SPACE_WRITE_GAP_MS) return;
+    lastEdit = Date.now();
+    edits = edits.then(() => editMessage(a.placeholder, renderProgress(message))).catch(() => undefined);
+  };
+
+  const user = a.event.chat?.user;
+  let reply: string;
+  let ok = false;
+  try {
+    // Asked inside a thread: the agent sees the thread, so "that" or "his idea" make sense.
+    const threadText = a.thread && liveGoogleAvailable() ? await threadMessages(a.thread).catch(() => "") : "";
+    const thread = threadText ? `This is the Google Chat thread I'm asking in, oldest message first:\n<thread>\n${threadText}\n</thread>\n\n` : "";
+    const text = await askAgent({
+      conversation: a.conversation,
+      asker: (user?.email ?? user?.name ?? "unknown").toLowerCase(),
+      prompt: `${agentContext(a.event)}\n\n${thread}${a.question}`,
+      onProgress: progress,
+    });
+    reply = renderAgentReply(text);
+    ok = true;
+  } catch (err) {
+    reply = `⚠️ ${plain(err instanceof AgentError ? err.message : describeAssistantError(err))}`;
+  }
+  await edits;
+  // If the edit still fails after retries, post the reply as a new message rather than lose it.
+  await editMessage(a.placeholder, reply).catch(() => postMessage(a.space, reply, a.thread));
+  await finishEvent(a.eventId).catch(() => undefined);
+  a.log(ok ? "answered by the agent" : `agent failed: ${clip(reply, 120)}`);
 }
