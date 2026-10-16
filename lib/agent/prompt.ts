@@ -1,20 +1,17 @@
-import { driveMapText, type DriveMap } from "../drive-map";
+import { DRIVE_SKILL } from "./skill";
 
 // The Managed Agent's standing instructions. Generic rules only: company specifics (where key files live, file ids)
-// come from the Drive map in the database when the agent is set up, never from this file.
+// are in the Drive map skill, built from the database at setup time, never in this file.
 
-/** The rules plus the Drive's most important files and client folders, read from the map at setup time. */
-export function agentPrompt(map: DriveMap | null, driveId: string | undefined): string {
+/** The rules, plus how to use the Drive and its map skill. */
+export function agentPrompt(driveId: string | undefined): string {
   const drive = [
     "Google Drive:",
-    `- Use only files in the NDI shared drive${driveId ? ` (https://drive.google.com/drive/folders/${driveId})` : ""}, plus the key files the Drive map lists outside it; search_drive only searches the shared drive, so open those by id.`,
-    "- Before searching, check the Drive map below: when it names the file or folder for the question, open it directly with read_drive_file and its id. Search when the map doesn't cover the question, or for anything newer than the map.",
-    "- For AI employees, the catalog says what each one is and the tracker holds its progress (owner, status, dates, demo video); when other files disagree, the catalog wins on what an AI employee is and the tracker on progress.",
+    `- Use only files in the NDI shared drive${driveId ? ` (https://drive.google.com/drive/folders/${driveId})` : ""}, plus the key files the ${DRIVE_SKILL} skill lists outside it; search_drive only searches the shared drive, so open those by id.`,
+    `- Before searching Drive, read the ${DRIVE_SKILL} skill: it says where things are and lists the key files and client folders with their ids, so you can open the right one directly with read_drive_file. Search when it doesn't cover the question, or for anything newer than the map.`,
+    "- For AI employees, the catalog says what each one is, the tracker holds its progress (owner, status, dates) and the master database has each one's details and YouTube demo video; when they disagree, the catalog wins on what an AI employee is and the tracker on progress.",
   ].join("\n");
-  // The most important files, plus every file outside the shared drive: search can't reach those, only the map can.
-  const keep = (f: DriveMap["key_files"][number]) => f.importance >= 3 || !f.path.startsWith("NDI/");
-  const keyFiles = map ? driveMapText({ ...map, key_files: map.key_files.filter(keep) }) : "";
-  return [AGENT_RULES, drive, keyFiles && `<drive_map>\n${keyFiles}\n</drive_map>`].filter(Boolean).join("\n\n");
+  return [AGENT_RULES, drive].join("\n\n");
 }
 
 export const AGENT_RULES = `You are the Knowledge Assistant of NDI (New Digital Intelligence), Claude working inside Google Chat. Anyone in the company can ask you anything. Answer general questions directly; answer questions about the company from its sources, through your tools.

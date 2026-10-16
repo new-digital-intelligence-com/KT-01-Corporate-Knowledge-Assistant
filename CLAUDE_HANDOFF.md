@@ -104,12 +104,14 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 - **Resources** in the Anthropic workspace of `ANTHROPIC_API_KEY`, created 2026-10-16:
   - agent `agent_01ELBePtUXGydeRpFcj7mUuJ` ("NDI Knowledge Assistant", `claude-opus-5-5`, effort medium);
   - environment `env_01DzNSSKGnSf1YFLqWRq6pMy` (cloud, limited networking, MCP servers allowed; no sandbox tools);
-  - vault `vlt_011Cg6jEMrVRfz13866ECxRn`, holding Michael's Fireflies key as a static bearer credential.
-- **Update the agent:** edit `lib/agent/prompt.ts` or `lib/agent/tools.ts`, then run `npm run managed-agent`. Each run makes a new agent version; new sessions use the latest. The prompt holds the Drive map's important files as they were when the script ran, so run it again after the map changes.
+  - vault `vlt_011Cg6jEMrVRfz13866ECxRn`, holding Michael's Fireflies key as a static bearer credential;
+  - skill `skill_01KcXiyVpoRynvQ2tm658TS3` (`ndi-drive-map`), the Drive map.
+- **The Drive map is a skill**, not part of the prompt (the user's choice, 2026-10-17): `SKILL.md` (organisation, where to look, the most important files, files outside the shared drive), `key-files.md` and `clients.md`. `lib/agent/skill.ts` builds it from the database. The prompt holds only the rules, about 2.5k characters, where the map used to make it 35k. Skills need the built-in read tool, so `read`, `grep` and `glob` are on; `bash`, `write`, `edit` and the web tools are off.
+- **Update the agent:** edit `lib/agent/prompt.ts`, `skill.ts` or `tools.ts`, then run `npm run managed-agent`. Each run uploads a new skill version from the current Drive map and makes a new agent version. Run it again after the map changes.
 - **Tools:**
   - Fireflies' read tools only (`fireflies_search`, `fireflies_fetch`, `fireflies_get_transcripts`, …). Its sharing, moving, renaming and privacy tools are off.
   - Our custom tools from `lib/agent/tools.ts`. Each call pauses the session until `askAgent` sends the result back.
-- **Sessions:** one per conversation and person, kept in `agent_sessions` (conversation, asker, session_id). It holds the whole conversation, so follow-ups work without our own memory. Sessions and their history stay in the Console (Managed Agents → Sessions), which is the place to debug an answer.
+- **Sessions:** one per conversation and person, kept in `agent_sessions` (conversation, asker, session_id). It holds the whole conversation, so follow-ups work without our own memory. A session keeps the agent version it started with, so after an update the next message starts a new session; the conversation's memory starts over then. Sessions and their history stay in the Console (Managed Agents → Sessions), which is the place to debug an answer.
 - **Tests on 2026-10-16** (run as Helmi in a DM):
   - catalog question 20 s;
   - pricing file and its owners 21 s;
@@ -137,7 +139,7 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
   - Claude: `ANTHROPIC_API_KEY`.
   - Google and Chat: `CHAT_BOT_KEY_JSON`, `GOOGLE_OAUTH_CLIENT_JSON`, `GOOGLE_USER_TOKEN_JSON`, `GOOGLE_DRIVE_ID`, `CHAT_ALLOWED_DOMAINS`, `CHAT_ENDPOINT_URL`, `CHAT_ADDON_SERVICE_ACCOUNT`, `WEB_CHAT_ENABLED=false`.
   - Sources and storage: `YOUTUBE_CHANNEL`, `AI_CATALOG_FILE_ID`, `AI_TRACKER_FILE_ID`, `DATABASE_URL`.
-  - Managed Agent: `MA_AGENT_ID`, `MA_ENVIRONMENT_ID`, `MA_FIREFLIES_VAULT_ID`, plus `AGENT_TRIAL_USERS` (emails that get the agent) or `ASSISTANT_ENGINE=agent` (everyone). `FIREFLIES_API_KEY` is only needed where `npm run managed-agent` runs.
+  - Managed Agent: `MA_AGENT_ID`, `MA_ENVIRONMENT_ID`, `MA_FIREFLIES_VAULT_ID`, plus `AGENT_TRIAL_USERS` (emails that get the agent) or `ASSISTANT_ENGINE=agent` (everyone). `FIREFLIES_API_KEY` and `MA_DRIVE_SKILL_ID` are only needed where `npm run managed-agent` runs.
   - The calendar zone defaults to GMT (`CALENDAR_TIME_ZONE`).
   - Store them as **encrypted**, never as Vercel's "sensitive" type. Sensitive values can never be read back — not by the API, the CLI or the dashboard — so the old project's credentials were unrecoverable and had to be made again from Google.
 - **Google sign-in:** if the user OAuth token expires or scopes change, run `npm run google-login` and send the user the link. They paste back the redirect URL, which you pipe into the script. Then update `GOOGLE_USER_TOKEN_JSON` in Vercel.

@@ -1,12 +1,13 @@
-import Anthropic from "@anthropic-ai/sdk";
+import Anthropic, { toFile } from "@anthropic-ai/sdk";
 import { loadEnvConfig } from "@next/env";
 import { agentPrompt } from "../lib/agent/prompt";
+import { DRIVE_SKILL, driveMapSkill } from "../lib/agent/skill";
 import { AGENT_TOOLS } from "../lib/agent/tools";
 import { env } from "../lib/config";
 import { loadDriveMap } from "../lib/drive-map";
 
 // Creates the Managed Agent's resources once, then updates the agent in place on every later run:
-// npm run managed-agent. Prints the ids to keep in .env.local and Vercel (MA_*). No secret is ever printed.
+// npm run managed-agent. Prints the ids to keep in .env.local (MA_*). No secret is ever printed.
 loadEnvConfig(process.cwd());
 
 const FIREFLIES_MCP = "https://api.fireflies.ai/mcp";
@@ -52,9 +53,23 @@ async function main() {
 
   // The Drive map names internal files, so it is read from the database here and goes into the agent's
   // configuration on Anthropic's side, never into the code. Re-run this script after the map changes.
+  // The Drive map names internal files, so it is read from the database here and uploaded as a skill to Anthropic,
+  // never put in the code. Each run uploads a new version; run again after the map changes.
   const map = await loadDriveMap();
-  const system = agentPrompt(map, env("GOOGLE_DRIVE_ID"));
-  console.log(`prompt: ${system.length} characters${map ? `, Drive map of ${map.generated_at.slice(0, 10)}` : ", no Drive map found"}`);
+  if (!map) throw new Error("No Drive map found in the database.");
+  const files = await Promise.all(driveMapSkill(map).map((f) => toFile(Buffer.from(f.content, "utf8"), `${DRIVE_SKILL}/${f.path}`)));
+  let skillId = env("MA_DRIVE_SKILL_ID");
+  if (skillId) {
+    await client.skills.versions.create(skillId, { files });
+    console.log(`skill ${DRIVE_SKILL}: new version uploaded (Drive map of ${map.generated_at.slice(0, 10)})`);
+  } else {
+    const skill = await client.skills.create({ display_name: "NDI Drive map", files });
+    skillId = skill.id;
+    console.log(`MA_DRIVE_SKILL_ID=${skillId}   (new)`);
+  }
+
+  const system = agentPrompt(env("GOOGLE_DRIVE_ID"));
+  console.log(`prompt: ${system.length} characters`);
 
   const config = {
     name: "NDI Knowledge Assistant",
@@ -62,7 +77,14 @@ async function main() {
     model: { id: "claude-opus-5-5", effort: "medium" as const },
     system,
     mcp_servers: [{ type: "url" as const, name: "fireflies", url: FIREFLIES_MCP }],
+    skills: [{ type: "custom" as const, skill_id: skillId, version: "latest" }],
     tools: [
+      // Skills are files the agent reads in its sandbox: only the reading tools are on, no shell, no edits, no web.
+      {
+        type: "agent_toolset_20260401" as const,
+        default_config: { enabled: false, permission_policy: { type: "always_allow" as const } },
+        configs: (["read", "grep", "glob"] as const).map((name) => ({ name, enabled: true })),
+      },
       {
         type: "mcp_toolset" as const,
         mcp_server_name: "fireflies",

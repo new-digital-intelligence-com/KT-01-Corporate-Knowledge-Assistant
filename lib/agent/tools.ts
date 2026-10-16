@@ -101,6 +101,8 @@ export function toolProgress(name: string): string {
   if (name === "search_drive") return "Searching the Drive…";
   if (name === "read_drive_file") return "Reading a file…";
   if (name.startsWith("fireflies")) return "Checking meetings…";
+  // The built-in read, grep and glob only ever read the Drive map skill in the agent's sandbox.
+  if (name === "read" || name === "grep" || name === "glob") return "Checking the Drive map…";
   return "Looking up the directory…";
 }
 

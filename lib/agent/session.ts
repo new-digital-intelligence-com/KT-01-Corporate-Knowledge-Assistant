@@ -65,12 +65,34 @@ async function storeSession(conversation: string, asker: string, sessionId: stri
   );
 }
 
-/** This person's session for this conversation: the stored one while it can still take messages, else a new one. */
+let latest: { at: number; version: Promise<number | undefined> } | undefined;
+
+/** The agent's current version, read again every 5 minutes. */
+function latestAgentVersion(): Promise<number | undefined> {
+  if (!latest || Date.now() - latest.at > 5 * 60_000) {
+    latest = {
+      at: Date.now(),
+      version: anthropic()
+        .beta.agents.retrieve(env("MA_AGENT_ID")!)
+        .then((agent) => agent.version)
+        .catch(() => undefined),
+    };
+  }
+  return latest.version;
+}
+
+/**
+ * This person's session for this conversation: the stored one while it can still take messages and runs the agent's
+ * current version, else a new one. A session keeps the version it started with, so after an update (new tools, a new
+ * skill) the conversation starts fresh rather than missing the change.
+ */
 async function sessionFor(conversation: string, asker: string): Promise<string> {
   const stored = await storedSession(conversation, asker);
   if (stored) {
-    const session = await anthropic().beta.sessions.retrieve(stored).catch(() => null);
-    if (session && session.status !== "terminated" && !session.archived_at) return stored;
+    const [session, version] = await Promise.all([anthropic().beta.sessions.retrieve(stored).catch(() => null), latestAgentVersion()]);
+    const open = session && session.status !== "terminated" && !session.archived_at;
+    const current = version === undefined || session?.agent?.version === version;
+    if (open && current) return stored;
   }
   const vaults = [env("MA_FIREFLIES_VAULT_ID")].filter((v): v is string => Boolean(v));
   const session = await anthropic().beta.sessions.create({
