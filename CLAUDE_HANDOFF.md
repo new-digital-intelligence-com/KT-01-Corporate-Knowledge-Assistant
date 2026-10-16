@@ -120,6 +120,12 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 
 ## Hosting and deploy
 
+- **Railway (the new host, set up 2026-10-17):** service `[KT-01] knowledge-assistant` (id `501508af-ab60-4abd-8698-9b16184f652a`) in the **POCs** project of the NDI workspace, environment production, URL https://kt-01-knowledge-assistant-production.up.railway.app.
+  - It builds the `Dockerfile` (Next.js standalone server, port 8080) and redeploys on every push to `main`. There's no 300 s limit as on Vercel.
+  - Its 19 variables are production's, copied from Vercel, plus the Managed Agent's, with `CHAT_ENDPOINT_URL` set to the Railway URL. List them with `railway variable list --service "[KT-01] knowledge-assistant"` (that prints values; don't paste them anywhere).
+  - The Railway CLI is logged in as Helmi. From Node on Windows, call `C:/Users/helmi/AppData/Roaming/npm/node_modules/@railway/cli/bin/railway.exe`: the npm shim can't be spawned.
+  - Vercel keeps running until the Chat app's HTTP endpoint URL points at Railway and a real message has been answered there. Then retire it.
+- **Old setup:** branch `pre-managed-agent` is `main` as it was before the Managed Agent (commit `78f5692`). Restore from there if needed.
 - **Production:** Vercel project `kt-01-corporate-knowledge-assistant` on the `er` team (team `team_lCL2eN4x0WgeW4BClQl4aeYZ`, project `prj_oSWoJrQcFegc8bAKQL8zLBBY0a3F`), URL https://kt-01-corporate-knowledge-assistant-pi.vercel.app. The Vercel account is Helmi's work Google account, `helmi.lakhder@new-digital-intelligence.com`. Moved here on 2026-09-19 from the old personal account `helmipaty@gmail.com` (team `team_j2liDA1o1xut25GwXWxsxtTL`), which can be retired.
   - The Google Chat app (GCP project `knowledge-assistant-508709`) uses "HTTP endpoint URL" = `…/api/google-chat`.
 - **GitHub:** `new-digital-intelligence-com/KT-01-Corporate-Knowledge-Assistant`, now **public**, and the Vercel project is connected to it. A push to `main` deploys by itself; no manual step. To deploy by hand anyway:
@@ -191,5 +197,6 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 - Vercel functions: `maxDuration = 300` on the Chat route. The answer runs in `after()`.
 - Chat allows about 1 write per second per space. Replies are capped at about 30 KB.
 - The production `ANTHROPIC_API_KEY` was replaced on 2026-10-12. Keep `.env.local` on the same key: the Managed Agent's resources live in that key's workspace, so a key from another workspace can't see them.
-- `askAgent` gives up after 240 s and interrupts the session, to stay inside Vercel's 300 s.
+- `askAgent` gives up after 240 s and interrupts the session, to stay inside Vercel's 300 s. On Railway this could go higher.
+- Vercel's env list endpoint returns **encrypted blobs**, even with `decrypt=true`; they happen to look like base64 JSON. For a real value, read one variable at a time: `GET /v1/projects/{id}/env/{envId}`.
 - Never commit Drive file names or ids, client details or anything from `data/` or `secrets/`.

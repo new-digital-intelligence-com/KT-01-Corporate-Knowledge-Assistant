@@ -1,4 +1,4 @@
-# Production image for Google Cloud Run: the Next.js standalone server on Node 22.
+# Production image for container hosts (Railway, Google Cloud Run): the Next.js standalone server on Node 22.
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 # better-sqlite3 compiles from source when no prebuilt binary matches.
@@ -14,6 +14,8 @@ ENV NODE_ENV=production HOSTNAME=0.0.0.0 PORT=8080
 COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
+# The local SQLite index lives in /app/data; the app runs as "node", which can't create folders in /app.
+RUN mkdir -p /app/data && chown node:node /app/data
 USER node
 EXPOSE 8080
 CMD ["node", "server.js"]
