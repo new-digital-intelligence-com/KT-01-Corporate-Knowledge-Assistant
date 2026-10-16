@@ -3,12 +3,20 @@ import { DRIVE_SKILL } from "./skill";
 // The Managed Agent's standing instructions. Generic rules only: company specifics (where key files live, file ids)
 // are in the Drive map skill, built from the database at setup time, never in this file.
 
-/** The rules, plus how to use the Drive and its map skill. */
-export function agentPrompt(driveId: string | undefined): string {
+/**
+ * The rules, plus how to use the Drive and its map skill. `driveConnector`: Google's own Drive server does the
+ * searching and reading instead of our search_drive and read_drive_file.
+ */
+export function agentPrompt(driveId: string | undefined, driveConnector = false): string {
+  const shared = `the NDI shared drive${driveId ? ` (https://drive.google.com/drive/folders/${driveId})` : ""}`;
+  const scope = driveConnector
+    ? `- Use only files in ${shared}, plus the key files the ${DRIVE_SKILL} skill lists outside it. search_files covers every file the connected account can open, so leave out results from anywhere else (check a file's folder with get_file_metadata when unsure).`
+    : `- Use only files in ${shared}, plus the key files the ${DRIVE_SKILL} skill lists outside it; search_drive only searches the shared drive, so open those by id.`;
+  const reader = driveConnector ? "read_file_content" : "read_drive_file";
   const drive = [
     "Google Drive:",
-    `- Use only files in the NDI shared drive${driveId ? ` (https://drive.google.com/drive/folders/${driveId})` : ""}, plus the key files the ${DRIVE_SKILL} skill lists outside it; search_drive only searches the shared drive, so open those by id.`,
-    `- Before searching Drive, read the ${DRIVE_SKILL} skill: it says where things are and lists the key files and client folders with their ids, so you can open the right one directly with read_drive_file. Search when it doesn't cover the question, or for anything newer than the map.`,
+    scope,
+    `- Before searching Drive, read the ${DRIVE_SKILL} skill: it says where things are and lists the key files and client folders with their ids, so you can open the right one directly with ${reader}. Search when it doesn't cover the question, or for anything newer than the map.`,
     "- For AI employees, the catalog says what each one is, the tracker holds its progress (owner, status, dates) and the master database has each one's details and YouTube demo video; when they disagree, the catalog wins on what an AI employee is and the tracker on progress.",
   ].join("\n");
   return [AGENT_RULES, drive].join("\n\n");

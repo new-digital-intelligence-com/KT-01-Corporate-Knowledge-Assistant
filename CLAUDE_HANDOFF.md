@@ -104,7 +104,7 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 - **Resources** in the Anthropic workspace of `ANTHROPIC_API_KEY`, created 2026-10-16:
   - agent `agent_01ELBePtUXGydeRpFcj7mUuJ` ("NDI Knowledge Assistant", `claude-opus-5-5`, effort medium);
   - environment `env_01DzNSSKGnSf1YFLqWRq6pMy` (cloud, limited networking, MCP servers allowed; no sandbox tools);
-  - vault `vlt_011Cg6jEMrVRfz13866ECxRn`, holding Michael's Fireflies key as a static bearer credential;
+  - vault `vlt_011Cg6jEMrVRfz13866ECxRn` ("shared connectors"), holding Michael's Fireflies key as a static bearer credential, and Helmi's Google Drive sign-in as an OAuth credential that Anthropic refreshes;
   - skill `skill_01KcXiyVpoRynvQ2tm658TS3` (`ndi-drive-map`), the Drive map.
 - **The Drive map is a skill**, not part of the prompt (the user's choice, 2026-10-17): `SKILL.md` (organisation, where to look, the most important files, files outside the shared drive), `key-files.md` and `clients.md`. `lib/agent/skill.ts` builds it from the database. The prompt holds only the rules, about 2.5k characters, where the map used to make it 35k. Skills need the built-in read tool, so `read`, `grep` and `glob` are on; `bash`, `write`, `edit` and the web tools are off.
 - **Update the agent:** edit `lib/agent/prompt.ts`, `skill.ts` or `tools.ts`, then run `npm run managed-agent`. Each run uploads a new skill version from the current Drive map and makes a new agent version. Run it again after the map changes.
@@ -188,9 +188,13 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 2. **Slow broad questions.** "Which client projects were active in 2026" takes about 2.5 minutes because the bot opens many folders. Consider a faster route, e.g. letting it trust the map's client list.
 3. **Drive map upkeep.** It is a manual snapshot, and new key files won't appear until it is refreshed.
 4. **LinkedIn:** parked by the user.
-5. **Google's connectors need preview access.** Google's official MCP servers for Drive (`drivemcp.googleapis.com`), Gmail (`gmailmcp`), Calendar (`calendarmcp`) and Chat (`chatmcp`, all `…googleapis.com/mcp/v1`) are in the Google Workspace Developer Preview Program. Helmi has to apply with the GCP project `knowledge-assistant-508709`. They also need a new OAuth client of type "Web application" marked for an AI agent; Google says it will reject other clients from 2026-11-11. Until access is granted, our own Drive tools fill in.
-6. **Per-person sign-in** for Gmail, Calendar and Chat isn't built yet. It needs that new OAuth client, a "connect your Google account" link from the bot, and each person's sign-in stored in their own vault. Sessions then attach the asker's vault.
-7. **Master database sheet:** the user said a master database sheet holds each AI employee's YouTube link. Ask which file it is, and make sure the agent's prompt names it.
+5. **Google's Drive connector is attached but off.**
+   - What's done: the agent has `google_drive` (`https://drivemcp.googleapis.com/mcp/v1`) next to Fireflies, with every tool off, and our `search_drive` and `read_drive_file` do the work. As of 2026-10-17 the Drive MCP API is enabled in the GCP project, and there's a new OAuth client of type "Web application" for an AI agent. Helmi's sign-in through that client is in `secrets/google-oauth-agent-client.json` and `secrets/google-user-token-agent.json`, and in the vault.
+   - What's still blocked: every Drive tool call still returns "The caller does not have permission". That's Google's preview gate, and Helmi applied to the program.
+   - To check: run the probe (initialize, then a `search_files` call, with that sign-in).
+   - Once it works: set `GOOGLE_DRIVE_MCP=on` in `.env.local` and run `npm run managed-agent`. Its read tools come on, ours step aside, and the prompt names the right tools.
+6. **Google's other connectors need the same preview access.** Gmail (`gmailmcp`), Calendar (`calendarmcp`) and Chat (`chatmcp`, all `…googleapis.com/mcp/v1`) are in the same Workspace Developer Preview Program as Drive. Their APIs also have to be enabled in the GCP project. From 2026-11-11, Google rejects OAuth clients not marked for an AI agent; the new client is one.
+7. **Per-person sign-in** for Gmail, Calendar and Chat isn't built yet. It needs a "connect your Google account" link from the bot, using the new AI-agent OAuth client (with the Railway callback added to its redirect URIs). Each person's sign-in goes in their own vault, and sessions attach the asker's vault.
 8. **The meeting feature built on 2026-09-23** (a hard invite check in code, private replies in spaces) was replaced by this design before it went live. It is kept in `git stash` ("2026-09-23 meeting feature").
 
 ## Gotchas
