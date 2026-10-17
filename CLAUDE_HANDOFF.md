@@ -212,7 +212,11 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 6. **Google's other connectors need the same preview access.** Gmail (`gmailmcp`), Calendar (`calendarmcp`) and Chat (`chatmcp`, all `…googleapis.com/mcp/v1`) are in the same Workspace Developer Preview Program as Drive. Their APIs also have to be enabled in the GCP project. From 2026-11-11, Google rejects OAuth clients not marked for an AI agent; the new client is one.
 7. **The meeting feature built on 2026-09-23** (a hard invite check in code, private replies in spaces) was replaced by this design before it went live. It is kept in `git stash` ("2026-09-23 meeting feature").
 8. **Retire Vercel** when the user says so. Nothing points at it any more.
-9. **Dependabot:** GitHub lists 12 vulnerability alerts on the repo as of 2026-10-17 (1 critical, 4 high, 5 moderate, 2 low). Not looked at yet.
+9. **Dependabot (fixed 2026-10-17):** next 16.3.8 (with eslint-config-next 16.3.8), sharp 0.35.5, source-map-js 1.2.2 and @grpc/grpc-js 1.14.6 close 11 of the 12 alerts. None of the seven Next.js ones could be exploited in production; only the dev server's MCP endpoint one applied, and only to a local `next dev`.
+   - Left: sprintf-js (#15), which has no fix. Only mammoth's command-line tool loads it; the app calls `mammoth.extractRawText`, which never does, and Next's file tracing leaves it out of the image. Mammoth's next release drops it.
+   - braces (npm advisory 1240992) is lint tooling only, with no fixed version; GitHub auto-dismissed it (#13) as a dev-only dependency.
+   - Never run `npm audit fix --force`: its only "fixes" downgrade eslint-config-next to 14 and mammoth to 0.3.
+10. **Image cache:** the Docker image's `node` user can't write `/app/.next/cache`, so any `/_next/image` request logs EACCES. It's harmless while the web page is off, and it was the same before the upgrade. To fix it, create and chown that folder in the Dockerfile, like `/app/data`.
 
 ## Gotchas
 
