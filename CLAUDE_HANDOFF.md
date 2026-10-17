@@ -216,7 +216,12 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
    - Left: sprintf-js (#15), which has no fix. Only mammoth's command-line tool loads it; the app calls `mammoth.extractRawText`, which never does, and Next's file tracing leaves it out of the image. Mammoth's next release drops it.
    - braces (npm advisory 1240992) is lint tooling only, with no fixed version; GitHub auto-dismissed it (#13) as a dev-only dependency.
    - Never run `npm audit fix --force`: its only "fixes" downgrade eslint-config-next to 14 and mammoth to 0.3.
-10. **Image cache:** the Docker image's `node` user can't write `/app/.next/cache`, so any `/_next/image` request logs EACCES. It's harmless while the web page is off, and it was the same before the upgrade. To fix it, create and chown that folder in the Dockerfile, like `/app/data`.
+   - Three newer Next.js advisories still cover 16.3.8, fixed only in 16.4.1 (there's no 16.3.9). This app uses none of the features they need:
+     - GHSA-673q-mjm6-r5xr (critical): needs Cache Components and a `use cache` function that returns typed arrays;
+     - GHSA-2464-fhr4-w9xw (critical): the same librsvg bug as sharp's, already covered by sharp 0.35.5;
+     - GHSA-p3m5-59mp-jv5r (high): needs a Server Action.
+   - As of 2026-10-17 those three weren't in GitHub's advisory database yet, so Dependabot and npm audit didn't show them; expect alerts once they're added. Next step: a tested move to 16.4.x (16.4.2 is current).
+10. **Image cache:** the Docker image's `node` user can't write to `/app/.next`, so `/_next/image` requests and Next's route-cache copy log EACCES. It's harmless while the web page is off, and it was the same before the upgrade. To fix it, chown `/app/.next` in the Dockerfile, like `/app/data`.
 
 ## Gotchas
 
