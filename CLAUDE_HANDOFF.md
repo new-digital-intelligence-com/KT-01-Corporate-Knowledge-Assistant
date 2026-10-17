@@ -6,9 +6,9 @@ Read this first when you pick up this project in a new session. It records what 
 
 A Google Chat app for NDI (New Digital Intelligence, new-digital-intelligence.com), called "Knowledge Assistant". It is Claude plus live, **read-only** access to the company's Google sources. Anyone in the company can ask it anything, in a direct message or by @mentioning it in a space. It answers general questions directly. For company questions it searches the sources, cites them, and fact-checks the answer before posting.
 
-It has two engines. The **built-in pipeline** (`lib/assistant.ts`) answers everyone today. The **Managed Agent** (`lib/agent/`, see below) is where the project is going: a Claude Managed Agent built like Claude Cowork or Claude Tag in Slack, with connectors for its tools. It is switched on per person with `AGENT_TRIAL_USERS`, or for everyone with `ASSISTANT_ENGINE=agent`.
+It has two engines. The **Managed Agent** (`lib/agent/`, see below) answers everyone since 2026-10-17: a Claude Managed Agent built like Claude Cowork or Claude Tag in Slack, with connectors for its tools. It is on for everyone with `ASSISTANT_ENGINE=agent` (set on Railway), or for some people only with `AGENT_TRIAL_USERS`. The **built-in pipeline** (`lib/assistant.ts`) is the fallback: delete `ASSISTANT_ENGINE` on Railway and it answers everyone again.
 
-The owner is Helmi Lakhder. The bot reads everything as his Google account.
+The owner is Helmi Lakhder. The agent reads Google as the person asking, and Fireflies as Michael Burian's account. The old pipeline reads everything as Helmi's Google account.
 
 ## How to work with the user
 
@@ -18,8 +18,8 @@ The owner is Helmi Lakhder. The bot reads everything as his Google account.
 - Commit and push as `HelmiDev03 <helmipaty@gmail.com>`, with no Claude attribution or Co-Authored-By lines. Check that no secrets are staged.
 - Never print or commit secrets: `.env.local`, `secrets/`, `data/`. Never commit company data (Drive file names, file IDs, client details) into the code; that goes in the database (see Drive map).
 - **Decisions already made; don't re-argue them:**
-  - Anyone in the company gets answers, public in spaces, with no per-person permission filtering.
-  - The bot reads all of the NDI shared drive, and Helmi's Gmail, Chat spaces and Calendar, plus the Workspace directory and the YouTube channel. Everything is read-only; the bot never takes actions.
+  - Anyone in the company gets answers, public in spaces. The old pipeline has no per-person permission filtering; the agent reads as the person asking (see the Managed Agent design below).
+  - The old pipeline reads all of the NDI shared drive, and Helmi's Gmail, Chat spaces and Calendar, plus the Workspace directory and the YouTube channel. Everything is read-only; the bot never takes actions.
   - The only safeguards are: company domain only (`CHAT_ALLOWED_DOMAINS`), no answers in spaces that allow external people, and never repeating credentials.
   - Keep the stack: Next.js/TypeScript. The user chose it over Python/FastAPI/LangGraph.
   - LinkedIn integration is parked.
@@ -49,11 +49,11 @@ Next.js 16 (read `node_modules/next/dist/docs` before changing Next code; see AG
 | Path | Role |
 |---|---|
 | `app/api/google-chat/route.ts` | Chat add-on HTTP endpoint. Verifies the Google ID token (audience `CHAT_ENDPOINT_URL`, email `CHAT_ADDON_SERVICE_ACCOUNT`), returns `{}` at once, and handles the event in `after()`. |
-| `lib/chat/bot.ts` | Event handling: domain and external-space checks, posts a placeholder, reads the thread and memory, calls `answerQuestion` (or the Managed Agent, for trial users or with `ASSISTANT_ENGINE=agent`), edits the placeholder with the answer. |
+| `lib/chat/bot.ts` | Event handling: domain and external-space checks, posts a placeholder, reads the thread and memory, calls the Managed Agent (for everyone with `ASSISTANT_ENGINE=agent`, or for `AGENT_TRIAL_USERS`) or else `answerQuestion`, and edits the placeholder with the answer. |
 | `lib/agent/session.ts` | The Managed Agent's runtime: one session per conversation and person, kept in Postgres (`agent_sessions`). It sends the question, runs our tools when the agent calls them, and returns the answer, catching up after a dropped stream. |
 | `lib/agent/tools.ts` | The agent's own tools, run in our code, all as the person asking: `search_drive`, `read_drive_file`, `search_people`, `search_groups`, `list_group_members`, `search_gmail`, `read_email_thread`, `search_calendar`, `list_calendars`, `check_availability`, `search_chat`, `read_chat_thread`, `read_space_messages`. |
 | `lib/agent/people.ts` | Short-lived access tokens for the person asking, through domain-wide delegation; company addresses only. `asGoogleAccount()` in `lib/live.ts` runs the existing Google code as that token, with every per-account cache kept per account. |
-| `lib/agent/prompt.ts`, `scripts/managed-agent.ts` | The agent's rules, and the setup script (`npm run managed-agent`) that creates or updates the agent with the rules plus the Drive map's key files. |
+| `lib/agent/prompt.ts`, `skill.ts`, `scripts/managed-agent.ts` | The agent's rules, the Drive map skill built from the database, and the setup script (`npm run managed-agent`) that creates or updates the agent, its skill and its connectors. |
 | `lib/chat/render.ts`, `client.ts` | Chat message and card rendering; posting and editing as the bot service account (chat.bot scope), with retries. |
 | `lib/chat/store.ts`, `lib/postgres.ts` | Conversation memory and delivery dedupe in Supabase Postgres (`DATABASE_URL`), with a SQLite fallback. |
 | `lib/assistant.ts` | The answer pipeline: tool definitions, system prompt, tool loop, fact check, rewrite, final citation formatting. |
@@ -111,7 +111,7 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
   - environment `env_01DzNSSKGnSf1YFLqWRq6pMy` (cloud, limited networking, MCP servers allowed; no sandbox tools);
   - vault `vlt_011Cg6jEMrVRfz13866ECxRn` ("shared connectors"), holding Michael's Fireflies key as a static bearer credential, and Helmi's Google Drive sign-in as an OAuth credential that Anthropic refreshes;
   - skill `skill_01KcXiyVpoRynvQ2tm658TS3` (`ndi-drive-map`), the Drive map.
-- **The Drive map is a skill**, not part of the prompt (the user's choice, 2026-10-17): `SKILL.md` (organisation, where to look, the most important files, files outside the shared drive), `key-files.md` and `clients.md`. `lib/agent/skill.ts` builds it from the database. The prompt holds only the rules, about 2.5k characters, where the map used to make it 35k. Skills need the built-in read tool, so `read`, `grep` and `glob` are on; `bash`, `write`, `edit` and the web tools are off.
+- **The Drive map is a skill**, not part of the prompt (the user's choice, 2026-10-17): `SKILL.md` (organisation, where to look, the most important files, files outside the shared drive), `key-files.md` and `clients.md`. `lib/agent/skill.ts` builds it from the database. The prompt holds only the rules, about 3k characters, where the map used to make it 35k. Skills need the built-in read tool, so `read`, `grep` and `glob` are on; `bash`, `write`, `edit` and the web tools are off.
 - **Update the agent:** edit `lib/agent/prompt.ts`, `skill.ts` or `tools.ts`, then run `npm run managed-agent`. Each run uploads a new skill version from the current Drive map and makes a new agent version. Run it again after the map changes.
 - **Tools:**
   - Fireflies' read tools only (`fireflies_search`, `fireflies_fetch`, `fireflies_get_transcripts`, …). Its sharing, moving, renaming and privacy tools are off.
@@ -124,30 +124,31 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
   - meeting summary 15 s;
   - follow-up answered from memory 6 s;
   - a made-up colleague got no meeting content.
+- **Tests on 2026-10-17**, each tool reading as the person asking: Calendar 10 s, Gmail 20 s, Chat 24 s, Drive 17 s, directory 11 s.
 
 ## Hosting and deploy
 
 - **Railway (the new host, set up 2026-10-17):** service `[KT-01] knowledge-assistant` (id `501508af-ab60-4abd-8698-9b16184f652a`) in the **POCs** project of the NDI workspace, environment production, URL https://kt-01-knowledge-assistant-production.up.railway.app.
   - It builds the `Dockerfile` (Next.js standalone server, port 8080) and redeploys on every push to `main`. There's no 300 s limit as on Vercel.
-  - Its 19 variables are production's, copied from Vercel, plus the Managed Agent's, with `CHAT_ENDPOINT_URL` set to the Railway URL. List them with `railway variable list --service "[KT-01] knowledge-assistant"` (that prints values; don't paste them anywhere).
+  - Its variables are production's, copied from Vercel, plus the Managed Agent's, with `CHAT_ENDPOINT_URL` set to the Railway URL and `ASSISTANT_ENGINE=agent`. List them with `railway variable list --service "[KT-01] knowledge-assistant"` (that prints values; don't paste them anywhere).
   - The Railway CLI is logged in as Helmi. From Node on Windows, call `C:/Users/helmi/AppData/Roaming/npm/node_modules/@railway/cli/bin/railway.exe`: the npm shim can't be spawned.
-  - Vercel keeps running until the Chat app's HTTP endpoint URL points at Railway and a real message has been answered there. Then retire it.
+  - Since 2026-10-17 the Chat app's HTTP endpoint URL points at Railway, and real messages are answered there. Vercel still runs but gets no Chat traffic; retire it when the user says so.
 - **Old setup:** branch `pre-managed-agent` is `main` as it was before the Managed Agent (commit `78f5692`). Restore from there if needed.
-- **Production:** Vercel project `kt-01-corporate-knowledge-assistant` on the `er` team (team `team_lCL2eN4x0WgeW4BClQl4aeYZ`, project `prj_oSWoJrQcFegc8bAKQL8zLBBY0a3F`), URL https://kt-01-corporate-knowledge-assistant-pi.vercel.app. The Vercel account is Helmi's work Google account, `helmi.lakhder@new-digital-intelligence.com`. Moved here on 2026-09-19 from the old personal account `helmipaty@gmail.com` (team `team_j2liDA1o1xut25GwXWxsxtTL`), which can be retired.
+- **Vercel (the old host):** project `kt-01-corporate-knowledge-assistant` on the `er` team (team `team_lCL2eN4x0WgeW4BClQl4aeYZ`, project `prj_oSWoJrQcFegc8bAKQL8zLBBY0a3F`), URL https://kt-01-corporate-knowledge-assistant-pi.vercel.app. The Vercel account is Helmi's work Google account, `helmi.lakhder@new-digital-intelligence.com`. Moved here on 2026-09-19 from the old personal account `helmipaty@gmail.com` (team `team_j2liDA1o1xut25GwXWxsxtTL`), which can be retired.
   - The Google Chat app (GCP project `knowledge-assistant-508709`) uses "HTTP endpoint URL" = `…/api/google-chat`.
-- **GitHub:** `new-digital-intelligence-com/KT-01-Corporate-Knowledge-Assistant`, now **public**, and the Vercel project is connected to it. A push to `main` deploys by itself; no manual step. To deploy by hand anyway:
+- **GitHub:** `new-digital-intelligence-com/KT-01-Corporate-Knowledge-Assistant`, now **public**. Railway and the Vercel project both deploy from it: a push to `main` deploys by itself, with no manual step. To deploy to Vercel by hand anyway:
   ```
   npx vercel deploy --prod --yes --token "$VERCEL_TOKEN"
   ```
   `VERCEL_TOKEN` is in `.env.local`. Read it without printing it. `.vercelignore` keeps secrets and data out.
-- **Production env vars** are set in Vercel (names only):
+- **Production env vars** are set on Railway, and still in Vercel (names only):
   - Claude: `ANTHROPIC_API_KEY`.
   - Google and Chat: `CHAT_BOT_KEY_JSON`, `GOOGLE_OAUTH_CLIENT_JSON`, `GOOGLE_USER_TOKEN_JSON`, `GOOGLE_DRIVE_ID`, `CHAT_ALLOWED_DOMAINS`, `CHAT_ENDPOINT_URL`, `CHAT_ADDON_SERVICE_ACCOUNT`, `WEB_CHAT_ENABLED=false`.
   - Sources and storage: `YOUTUBE_CHANNEL`, `AI_CATALOG_FILE_ID`, `AI_TRACKER_FILE_ID`, `DATABASE_URL`.
   - Managed Agent: `MA_AGENT_ID`, `MA_ENVIRONMENT_ID`, `MA_FIREFLIES_VAULT_ID`, plus `AGENT_TRIAL_USERS` (emails that get the agent) or `ASSISTANT_ENGINE=agent` (everyone). `FIREFLIES_API_KEY` and `MA_DRIVE_SKILL_ID` are only needed where `npm run managed-agent` runs.
   - The calendar zone defaults to GMT (`CALENDAR_TIME_ZONE`).
   - Store them as **encrypted**, never as Vercel's "sensitive" type. Sensitive values can never be read back — not by the API, the CLI or the dashboard — so the old project's credentials were unrecoverable and had to be made again from Google.
-- **Google sign-in:** if the user OAuth token expires or scopes change, run `npm run google-login` and send the user the link. They paste back the redirect URL, which you pipe into the script. Then update `GOOGLE_USER_TOKEN_JSON` in Vercel.
+- **Google sign-in:** if the user OAuth token expires or scopes change, run `npm run google-login` and send the user the link. They paste back the redirect URL, which you pipe into the script. Then update `GOOGLE_USER_TOKEN_JSON` on Railway.
 - **Local `secrets/`** (gitignored, on this machine only, rebuilt 2026-09-19): `google-oauth-client.json` is the Desktop OAuth client from GCP → Credentials (loopback `http://127.0.0.1:53682`); `google-service-account.json` is a key for `knowledge-assistant-bot@knowledge-assistant-508709.iam.gserviceaccount.com`; `google-user-token.json` comes from `npm run google-login`, signed in as `helmi.lakhder@new-digital-intelligence.com`.
 
 ## Checking changes
@@ -160,9 +161,11 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 
 ## State (2026-10-17)
 
-**Managed Agent: built and tested locally, not deployed yet.**
-- Working: Fireflies through its own connector, Drive and directory through our tools, the Chat bridge with trial mode, and memory per conversation.
-- Next: a trial in production for Helmi only (`AGENT_TRIAL_USERS`). Then per-person Gmail, Calendar and Chat, then Google's connectors.
+**Managed Agent: live for everyone since 2026-10-17.**
+- Railway has `ASSISTANT_ENGINE=agent`, so every message to the bot in Google Chat goes to the agent (agent version 9 at the switch).
+- Every Google tool reads as the person asking; Fireflies reads as Michael, with the invitee rule in the prompt.
+- To switch everyone back to the old pipeline, delete `ASSISTANT_ENGINE` on Railway. It redeploys in about a minute.
+- Hosting moved to Railway the same day, and the Chat app's HTTP endpoint points there.
 
 **Done and live:**
 - Hosting moved to the new Vercel account (2026-09-19). The old project was deleted, the Chat app's HTTP endpoint URL now points at the new URL, and a real Chat message was answered from it.
@@ -180,6 +183,7 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 
 **Open items:**
 1. **Move hosting to Google Cloud Run: blocked on billing.**
+   - Railway now hosts the bot, so this matters only if the company wants it on Google Cloud.
    - The GCP project `knowledge-assistant-508709` has no billing account, so Cloud Run, Cloud Build, Artifact Registry and Secret Manager can't be enabled.
    - Helmi is Owner of the project, but can't see any billing account and isn't an org admin.
    - The user is sorting it out with the company (super admin, e.g. Michael Burian) or a card.
@@ -200,6 +204,8 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
    - Once it works: set `GOOGLE_DRIVE_MCP=on` in `.env.local` and run `npm run managed-agent`. Its read tools come on, ours step aside, and the prompt names the right tools.
 6. **Google's other connectors need the same preview access.** Gmail (`gmailmcp`), Calendar (`calendarmcp`) and Chat (`chatmcp`, all `…googleapis.com/mcp/v1`) are in the same Workspace Developer Preview Program as Drive. Their APIs also have to be enabled in the GCP project. From 2026-11-11, Google rejects OAuth clients not marked for an AI agent; the new client is one.
 7. **The meeting feature built on 2026-09-23** (a hard invite check in code, private replies in spaces) was replaced by this design before it went live. It is kept in `git stash` ("2026-09-23 meeting feature").
+8. **Retire Vercel** when the user says so. Nothing points at it any more.
+9. **Dependabot:** GitHub listed 11 vulnerability alerts on the repo when we pushed on 2026-10-17. Not looked at yet.
 
 ## Gotchas
 
