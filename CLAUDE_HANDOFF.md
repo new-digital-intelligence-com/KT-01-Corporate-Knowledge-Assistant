@@ -40,7 +40,7 @@ The owner is Helmi Lakhder. The agent reads Google as the person asking, and Fir
   - Sources in a collapsible "Sources (n)" card.
   - No status phrases like "partly verified".
   - Every time given in GMT.
-  - Plain text with "- " lists.
+  - "- " lists. Since 2026-10-17, people's names are in bold every time so they stand out, and a longer answer gives each topic a short bold title with its points under it. The agent writes Markdown (bold, links); `renderAgentReply` turns it into Chat text and gathers every link into the Sources card.
   - Reply in the main conversation, unless the question was asked inside a thread.
 
 ## Architecture

@@ -5,7 +5,7 @@ import { liveGoogleAvailable, threadMessages } from "../live";
 import { clip, errorMessage, gmt } from "../text";
 import type { AssistantEvent, FinalAnswer, HistoryTurn } from "../types";
 import { editMessage, getSpace, msSinceLastWrite, postMessage } from "./client";
-import { plain, renderAgentReply, renderAnswer, renderProgress } from "./render";
+import { plain, renderAgentReply, renderAnswer, renderProgress, type ChatReply } from "./render";
 import { claimEvent, conversationHistory, finishEvent, saveTurn } from "./store";
 
 /** The parts of a Google Workspace add-on event for Chat that the bot reads. */
@@ -264,7 +264,7 @@ async function answerWithAgent(a: {
   };
 
   const user = a.event.chat?.user;
-  let reply: string;
+  let reply: string | ChatReply;
   let ok = false;
   try {
     // Asked inside a thread: the agent sees the thread, so "that" or "his idea" make sense.
@@ -285,5 +285,5 @@ async function answerWithAgent(a: {
   // If the edit still fails after retries, post the reply as a new message rather than lose it.
   await editMessage(a.placeholder, reply).catch(() => postMessage(a.space, reply, a.thread));
   await finishEvent(a.eventId).catch(() => undefined);
-  a.log(ok ? "answered by the agent" : `agent failed: ${clip(reply, 120)}`);
+  a.log(ok ? "answered by the agent" : `agent failed: ${clip(typeof reply === "string" ? reply : reply.text, 120)}`);
 }
