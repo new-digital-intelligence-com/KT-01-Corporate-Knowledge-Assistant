@@ -228,6 +228,7 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 - The NDI Tools sheet and Corporate Information sheet live **outside** the NDI shared drive, so Drive search (limited to `GOOGLE_DRIVE_ID`) won't find them. Open them by id; they are in the Drive map.
 - Vercel functions: `maxDuration = 300` on the Chat route. The answer runs in `after()`.
 - Chat allows about 1 write per second per space. Replies are capped at about 30 KB.
+- Every message the bot writes sets `markupSyntax: MARKUP_SYNTAX_CHAT` (`lib/chat/client.ts`). New Chat apps default to Markdown, where `*x*` is italic and `<url|label>` links break.
 - The production `ANTHROPIC_API_KEY` was replaced on 2026-10-12. Keep `.env.local` on the same key: the Managed Agent's resources live in that key's workspace, so a key from another workspace can't see them. The same goes for people in the Console: the agent, vault and sessions show up only in that workspace, so someone who can't see them is most likely looking at another workspace.
 - `askAgent` gives up after 240 s and interrupts the session, to stay inside Vercel's 300 s. On Railway this could go higher.
 - Vercel's env list endpoint returns **encrypted blobs**, even with `decrypt=true`; they happen to look like base64 JSON. For a real value, read one variable at a time: `GET /v1/projects/{id}/env/{envId}`.

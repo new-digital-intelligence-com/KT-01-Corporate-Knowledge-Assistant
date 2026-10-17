@@ -10,6 +10,10 @@ const SCOPES = ["https://www.googleapis.com/auth/chat.bot"];
 // Google Chat rejects messages over 32,000 bytes, text and cards together.
 const MAX_BYTES = 30_000;
 
+// Our markup is Chat's own (*bold*, _italic_, <url|label> links). New Chat apps default to Markdown, where *x* is
+// italic and those links break, so every write names the syntax.
+const MARKUP = { markupSyntax: "MARKUP_SYNTAX_CHAT" };
+
 // Chat allows about one message write per second per space and answers 429 above that.
 // The client library doesn't retry POST or PATCH by default, so writes opt in explicitly.
 const WRITE_OPTIONS = {
@@ -42,7 +46,7 @@ export async function postMessage(space: string, reply: string | ChatReply, thre
       // Chosen once per message, so a retried request returns the same message instead of posting twice.
       requestId: randomUUID(),
       ...(thread ? { messageReplyOption: "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD" } : {}),
-      requestBody: { text: fit(text, cardsV2), ...(cardsV2 ? { cardsV2 } : {}), ...(thread ? { thread: { name: thread } } : {}) },
+      requestBody: { text: fit(text, cardsV2), ...MARKUP, ...(cardsV2 ? { cardsV2 } : {}), ...(thread ? { thread: { name: thread } } : {}) },
     },
     WRITE_OPTIONS,
   );
@@ -54,12 +58,12 @@ export async function postMessage(space: string, reply: string | ChatReply, thre
 export async function editMessage(name: string, reply: string | ChatReply): Promise<void> {
   lastWriteAt.set(name.split("/messages/")[0], Date.now());
   if (typeof reply === "string") {
-    await chat().spaces.messages.patch({ name, updateMask: "text", requestBody: { text: fit(reply) } }, WRITE_OPTIONS);
+    await chat().spaces.messages.patch({ name, updateMask: "text", requestBody: { text: fit(reply), ...MARKUP } }, WRITE_OPTIONS);
     return;
   }
   const cardsV2 = reply.cardsV2 ?? [];
   await chat().spaces.messages.patch(
-    { name, updateMask: "text,cards_v2", requestBody: { text: fit(reply.text, cardsV2), cardsV2 } },
+    { name, updateMask: "text,cards_v2", requestBody: { text: fit(reply.text, cardsV2), ...MARKUP, cardsV2 } },
     WRITE_OPTIONS,
   );
 }

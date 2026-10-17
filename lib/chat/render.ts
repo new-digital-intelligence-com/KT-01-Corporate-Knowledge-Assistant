@@ -36,13 +36,15 @@ export function renderAnswer(answer: FinalAnswer): ChatReply {
  */
 export function renderAgentReply(answer: string): ChatReply {
   const sources: { title: string; url: string }[] = [];
-  let text = plain(hideSecrets(answer))
-    .replace(/\r\n?/g, "\n")
-    .split("\n")
+  const lines = plain(hideSecrets(answer)).replace(/\r\n?/g, "\n").split("\n");
+  // Chat nests a bullet four spaces per level; the agent may indent by two, so each indent it uses becomes a level.
+  const indents = [...new Set(lines.flatMap((line) => /^( *)[-*•]\s/.exec(line)?.[1].length ?? []))].sort((x, y) => x - y);
+  let text = lines
     .map((line) => {
       const heading = /^ {0,3}#{1,6}\s+(.*?)\s*#*$/.exec(line);
       if (heading) return heading[1] ? `**${heading[1].replace(/\*\*/g, "")}**` : "";
-      return line.replace(/^(\s*)[*•]\s+/, "$1- ");
+      const bullet = /^( *)[-*•]\s+(.*)$/.exec(line);
+      return bullet ? `${"    ".repeat(indents.indexOf(bullet[1].length))}- ${bullet[2]}` : line;
     })
     .join("\n")
     .replace(/\*\*([^*\n]+)\*\*/g, "*$1*")
@@ -53,6 +55,7 @@ export function renderAgentReply(answer: string): ChatReply {
     })
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+  text = boldNamesEverywhere(text);
 
   // A closing "Sources: …" paragraph would only repeat the card.
   const paragraphs = text.split("\n\n");
@@ -63,6 +66,27 @@ export function renderAgentReply(answer: string): ChatReply {
 
   if (!sources.length) return { text };
   return { text, cardsV2: [sourcesCard(sources.map((s, i) => entryHtml(i + 1, s.title, s.url, linkKind(s.url))))] };
+}
+
+/**
+ * The agent bolds people's names but can miss a repeat. A name it bolded once is bolded wherever else it appears in
+ * plain text, never inside a link, another bold span or a title line. Acronyms are left alone.
+ */
+function boldNamesEverywhere(text: string): string {
+  const names = new Set<string>();
+  for (const line of text.split("\n")) {
+    if (/^\*[^*\n]+\*$/.test(line.trim())) continue;
+    for (const [, span] of line.matchAll(/\*([^*\n]+)\*/g)) {
+      if (/^\p{Lu}[\p{L}'’.-]*( \p{Lu}[\p{L}'’.-]*){0,3}$/u.test(span) && /\p{Ll}/u.test(span)) names.add(span);
+    }
+  }
+  if (!names.size) return text;
+  const alternatives = [...names].sort((x, y) => y.length - x.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const name = new RegExp(`(?<![\\p{L}\\p{N}])(${alternatives.join("|")})(?![\\p{L}\\p{N}])`, "gu");
+  return text
+    .split(/(\*[^*\n]+\*|<[^<>\n]+>)/)
+    .map((part, i) => (i % 2 ? part : part.replace(name, "*$1*")))
+    .join("");
 }
 
 export function renderProgress(message: string): string {
