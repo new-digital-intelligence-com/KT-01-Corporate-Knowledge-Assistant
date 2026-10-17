@@ -20,11 +20,11 @@ import {
   type SearchResult,
 } from "../live";
 import { errorMessage } from "../text";
-import { personAccessToken } from "./people";
+import { PERSON_SCOPES, personAccessToken } from "./people";
 
-// The Managed Agent's own tools, run here in our code. Drive and the directory read as the company account (Helmi's);
-// Gmail, Calendar and Chat read as the person asking, through the admin's domain-wide delegation. Which person that is
-// comes from the verified Chat sender, never from the model. Every tool only reads.
+// The Managed Agent's own tools, run here in our code. Every one reads as the person asking (Drive, the directory,
+// Gmail, Calendar and Chat), through the admin's domain-wide delegation, so each person sees only what their own
+// account can see. Which person that is comes from the verified Chat sender, never from the model. Every tool only reads.
 
 /** Parts of a file one read returns (about 1,200 characters each); the rest comes with `start`. */
 const READ_PARTS = 40;
@@ -33,8 +33,8 @@ type Args = Record<string, unknown>;
 
 interface AgentTool {
   definition: BetaManagedAgentsCustomToolParams;
-  /** Reads the asker's own account rather than the company's. */
-  personal?: boolean;
+  /** The read-only scopes it reads the asker's own account with. */
+  scopes: string[];
   /** Shown in Chat while it runs; never names a file, a search or a person. */
   progress: string;
   run: (args: Args) => Promise<string>;
@@ -87,6 +87,7 @@ const TOOLS: AgentTool[] = [
       },
       ["query"],
     ),
+    scopes: PERSON_SCOPES.drive,
     progress: "Searching the Drive…",
     run: async (args) => {
       const query = text(args, "query");
@@ -107,6 +108,7 @@ const TOOLS: AgentTool[] = [
       },
       ["file"],
     ),
+    scopes: PERSON_SCOPES.drive,
     progress: "Reading a file…",
     run: async (args) => {
       const fileId = driveIdFrom(text(args, "file"));
@@ -126,6 +128,7 @@ const TOOLS: AgentTool[] = [
         "leave it empty for everyone. Always returns every match with the total.",
       { query: { type: "string", description: "A name, an email, or directory search syntax" } },
     ),
+    scopes: PERSON_SCOPES.directory,
     progress: "Looking up the directory…",
     run: async (args) => listing("the directory", await searchPeople(text(args, "query"))),
   },
@@ -139,6 +142,7 @@ const TOOLS: AgentTool[] = [
         member_email: { type: "string", description: "A person's email, to list the groups they belong to" },
       },
     ),
+    scopes: PERSON_SCOPES.directory,
     progress: "Looking up the directory…",
     run: async (args) => listing("Workspace groups", await searchGroups(text(args, "query"), text(args, "member_email") || undefined)),
   },
@@ -149,6 +153,7 @@ const TOOLS: AgentTool[] = [
       { group_email: { type: "string", description: "The group's email address" } },
       ["group_email"],
     ),
+    scopes: PERSON_SCOPES.directory,
     progress: "Looking up the directory…",
     run: async (args) => {
       const rows = await listGroupMembers(text(args, "group_email"));
@@ -169,7 +174,7 @@ const TOOLS: AgentTool[] = [
       },
       ["query"],
     ),
-    personal: true,
+    scopes: PERSON_SCOPES.gmail,
     progress: "Checking your Gmail…",
     run: async (args) => listing("Gmail", await searchGmail(text(args, "query"), count(args, "limit", 8, 15))),
   },
@@ -183,7 +188,7 @@ const TOOLS: AgentTool[] = [
       },
       ["thread_id"],
     ),
-    personal: true,
+    scopes: PERSON_SCOPES.gmail,
     progress: "Reading an email…",
     run: async (args) => {
       const id = text(args, "thread_id").replace(/^gmail:/, "");
@@ -205,7 +210,7 @@ const TOOLS: AgentTool[] = [
         limit: { type: "integer", minimum: 1, maximum: 100, description: "Maximum events (default 25)" },
       },
     ),
-    personal: true,
+    scopes: PERSON_SCOPES.calendar,
     progress: "Checking your calendar…",
     run: async (args) =>
       listing(
@@ -215,7 +220,7 @@ const TOOLS: AgentTool[] = [
   },
   {
     definition: tool("list_calendars", "List the calendars the person asking can see (their own and shared ones), with ids and access level.", {}),
-    personal: true,
+    scopes: PERSON_SCOPES.calendar,
     progress: "Checking your calendar…",
     run: async () => (await listCalendars()).map((row) => row.text).join("\n\n"),
   },
@@ -230,7 +235,7 @@ const TOOLS: AgentTool[] = [
       },
       ["emails"],
     ),
-    personal: true,
+    scopes: PERSON_SCOPES.calendar,
     progress: "Checking calendars…",
     run: async (args) => {
       const emails = Array.isArray(args.emails) ? args.emails.filter((e): e is string => typeof e === "string") : [];
@@ -249,7 +254,7 @@ const TOOLS: AgentTool[] = [
       },
       ["query"],
     ),
-    personal: true,
+    scopes: PERSON_SCOPES.chat,
     progress: "Searching Chat…",
     run: async (args) => listing("Google Chat", await searchChat(text(args, "query"), count(args, "limit", 8, 15))),
   },
@@ -260,7 +265,7 @@ const TOOLS: AgentTool[] = [
       { thread: { type: "string", description: "The thread id, spaces/…/threads/…" } },
       ["thread"],
     ),
-    personal: true,
+    scopes: PERSON_SCOPES.chat,
     progress: "Reading a Chat thread…",
     run: async (args) => {
       const thread = text(args, "thread").replace(/^gchat:/, "");
@@ -279,7 +284,7 @@ const TOOLS: AgentTool[] = [
       },
       ["space"],
     ),
-    personal: true,
+    scopes: PERSON_SCOPES.chat,
     progress: "Reading a Chat space…",
     run: async (args) => {
       const found = await findSpace(text(args, "space"));
@@ -308,13 +313,14 @@ export function toolProgress(name: string): string {
   return "Working on it…";
 }
 
-/** Runs one of our tools; personal ones read as `asker`, the verified sender of the Chat message. */
+/** Runs one of our tools as `asker`, the verified sender of the Chat message, with only the scopes that tool needs. */
 export async function runAgentTool(name: string, input: unknown, asker: string): Promise<ToolOutcome> {
   const found = TOOLS.find((t) => t.definition.name === name);
   if (!found) return { text: `Unknown tool: ${name}`, isError: true };
   const args = (input ?? {}) as Args;
   try {
-    const text = found.personal ? await asGoogleAccount(await personAccessToken(asker), () => found.run(args)) : await found.run(args);
+    const token = await personAccessToken(asker, found.scopes);
+    const text = await asGoogleAccount(token, () => found.run(args));
     return { text, isError: false };
   } catch (err) {
     return { text: `${name} failed: ${errorMessage(err)}`, isError: true };

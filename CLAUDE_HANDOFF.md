@@ -26,8 +26,12 @@ The owner is Helmi Lakhder. The bot reads everything as his Google account.
   - **The Managed Agent design (decided 2026-10-16):**
     - Every source comes through a connector (MCP server), like in Claude Cowork. Don't rebuild what a connector already does.
     - **Fireflies:** Fireflies' own MCP server (`https://api.fireflies.ai/mcp`), signed in with Michael Burian's account. The rule that a meeting is only for the people invited to it lives in the agent's prompt; the user chose that over a hard check in code.
-    - **Gmail, Calendar and Chat: per person, with no sign-in links.** Michael (super admin) approved domain-wide delegation on 2026-10-17, read-only, for the bot's service account (client ID `111236854153815010074`): `gmail.readonly`, `calendar.readonly`, `chat.spaces.readonly`, `chat.messages.readonly`. The agent's Gmail, Calendar and Chat tools act as the person asking, and only ever as the verified sender of the Chat message (`lib/agent/people.ts`). Chat is per person so it can always read the conversation it's asked in.
-    - **Drive and Sheets:** one account (Helmi's), kept to the NDI shared drive by the prompt.
+    - **Everything is per person, with no sign-in links (decided 2026-10-17):** Drive, the directory, Gmail, Calendar and Chat. Each person sees exactly what their own account can open.
+      - Michael (super admin) approved domain-wide delegation, read-only, for the bot's service account (client ID `111236854153815010074`), with these scopes: `gmail.readonly`, `calendar.readonly`, `chat.spaces.readonly`, `chat.messages.readonly`, `drive.readonly`, `admin.directory.user.readonly`, `admin.directory.group.readonly`, `admin.directory.group.member.readonly`.
+      - The agent's tools act as the person asking, and only ever as the verified sender of the Chat message (`lib/agent/people.ts`). Each tool asks only for its own scopes, so a scope that isn't approved breaks only that tool.
+      - Drive search stays limited to the NDI shared drive.
+      - Chat is per person so the agent can always read the conversation it's asked in.
+      - The Fireflies connector stays on Michael's account.
     - **Catalog, tracker and YouTube demo links** are read straight from their Drive files (the YouTube links are in a master database sheet), not through special tools. The directory stays one of our own tools: no connector exists for it.
     - Only read tools are switched on in every connector. Fireflies' and Google's servers can also change things (share, move, send); those stay off.
 - Answer style the user asked for:
@@ -47,7 +51,7 @@ Next.js 16 (read `node_modules/next/dist/docs` before changing Next code; see AG
 | `app/api/google-chat/route.ts` | Chat add-on HTTP endpoint. Verifies the Google ID token (audience `CHAT_ENDPOINT_URL`, email `CHAT_ADDON_SERVICE_ACCOUNT`), returns `{}` at once, and handles the event in `after()`. |
 | `lib/chat/bot.ts` | Event handling: domain and external-space checks, posts a placeholder, reads the thread and memory, calls `answerQuestion` (or the Managed Agent, for trial users or with `ASSISTANT_ENGINE=agent`), edits the placeholder with the answer. |
 | `lib/agent/session.ts` | The Managed Agent's runtime: one session per conversation and person, kept in Postgres (`agent_sessions`). It sends the question, runs our tools when the agent calls them, and returns the answer, catching up after a dropped stream. |
-| `lib/agent/tools.ts` | The agent's own tools, run in our code. As Helmi's account: `search_drive`, `read_drive_file`, `search_people`, `search_groups`, `list_group_members`. As the person asking: `search_gmail`, `read_email_thread`, `search_calendar`, `list_calendars`, `check_availability`, `search_chat`, `read_chat_thread`, `read_space_messages`. |
+| `lib/agent/tools.ts` | The agent's own tools, run in our code, all as the person asking: `search_drive`, `read_drive_file`, `search_people`, `search_groups`, `list_group_members`, `search_gmail`, `read_email_thread`, `search_calendar`, `list_calendars`, `check_availability`, `search_chat`, `read_chat_thread`, `read_space_messages`. |
 | `lib/agent/people.ts` | Short-lived access tokens for the person asking, through domain-wide delegation; company addresses only. `asGoogleAccount()` in `lib/live.ts` runs the existing Google code as that token, with every per-account cache kept per account. |
 | `lib/agent/prompt.ts`, `scripts/managed-agent.ts` | The agent's rules, and the setup script (`npm run managed-agent`) that creates or updates the agent with the rules plus the Drive map's key files. |
 | `lib/chat/render.ts`, `client.ts` | Chat message and card rendering; posting and editing as the bot service account (chat.bot scope), with retries. |
