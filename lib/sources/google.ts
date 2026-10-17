@@ -103,6 +103,14 @@ export function chatBotAuth(scopes: string[]) {
   return serviceAccountAuth(readKey("CHAT_BOT_KEY_JSON", "CHAT_BOT_KEY_FILE"), scopes);
 }
 
+/**
+ * The bot's service account acting as one person of the company, through the super admin's domain-wide delegation
+ * (approved 2026-10-17 for read-only Gmail, Calendar and Chat). Callers pass the verified asker, never anyone else.
+ */
+export function delegatedAuth(email: string, scopes: string[]) {
+  return serviceAccountAuth(readKey("CHAT_BOT_KEY_JSON", "CHAT_BOT_KEY_FILE"), scopes, email);
+}
+
 function readKey(jsonVar: string, fileVar: string): ServiceAccountKey {
   const key = jsonSecret<ServiceAccountKey>(jsonVar, fileVar);
   if (!key) throw new Error(`No service account key: set ${fileVar} (or ${jsonVar}).`);

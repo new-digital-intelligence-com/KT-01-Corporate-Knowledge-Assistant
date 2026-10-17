@@ -234,8 +234,8 @@ function agentContext(event: ChatEvent): string {
   const who = user?.email ? `${user.displayName || user.email} <${user.email}>` : (user?.displayName ?? "unknown");
   const where =
     space?.spaceType === "DIRECT_MESSAGE"
-      ? "Asked in a direct message with the assistant."
-      : `Asked in the Google Chat space "${space?.displayName || space?.name}"; everyone in it reads your answer.`;
+      ? `Asked in a direct message with the assistant (space id ${space?.name}).`
+      : `Asked in the Google Chat space "${space?.displayName || space?.name}" (space id ${space?.name}); everyone in it reads your answer.`;
   return [
     "<context>",
     `Now: ${now.toLocaleDateString("en-GB", { weekday: "long", timeZone: "UTC" })} ${gmt(now.toISOString())}.`,

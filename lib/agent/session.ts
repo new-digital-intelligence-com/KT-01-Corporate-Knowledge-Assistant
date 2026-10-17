@@ -136,7 +136,8 @@ export async function askAgent(ask: AgentAsk): Promise<string> {
   const reply = (event: SessionEvent) =>
     pending.push(
       (async () => {
-        const outcome = await runAgentTool(String(event.name), event.input);
+        // Personal tools read as the person asking: the verified Chat sender, never what the model passes.
+        const outcome = await runAgentTool(String(event.name), event.input, ask.asker);
         await c.beta.sessions.events.send(sessionId, {
           events: [{ type: "user.custom_tool_result", custom_tool_use_id: event.id, content: [{ type: "text", text: outcome.text }], is_error: outcome.isError }],
         });

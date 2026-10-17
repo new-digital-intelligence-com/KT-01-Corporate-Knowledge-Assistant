@@ -1,5 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 import {
   google,
+  type Auth,
   type admin_directory_v1,
   type calendar_v3,
   type chat_v1,
@@ -56,26 +59,77 @@ export function liveGoogleAvailable(): boolean {
   return userAuthConfigured();
 }
 
-let clients:
-  | {
-      drive: drive_v3.Drive;
-      gmail: gmail_v1.Gmail;
-      chat: chat_v1.Chat;
-      admin: admin_directory_v1.Admin;
-      youtube: youtube_v3.Youtube;
-      calendar: calendar_v3.Calendar;
-    }
-  | undefined;
+interface Clients {
+  drive: drive_v3.Drive;
+  gmail: gmail_v1.Gmail;
+  chat: chat_v1.Chat;
+  admin: admin_directory_v1.Admin;
+  youtube: youtube_v3.Youtube;
+  calendar: calendar_v3.Calendar;
+}
 
-function g() {
-  clients ??= {
-    drive: google.drive({ version: "v3", auth: googleAuth(undefined, GOOGLE_SCOPES.drive) }),
-    gmail: google.gmail({ version: "v1", auth: googleAuth(undefined, GOOGLE_SCOPES.gmail) }),
-    chat: google.chat({ version: "v1", auth: googleAuth(undefined, GOOGLE_SCOPES.chat) }),
-    admin: google.admin({ version: "directory_v1", auth: googleAuth(undefined, GOOGLE_SCOPES.directory) }),
-    youtube: google.youtube({ version: "v3", auth: googleAuth(undefined, GOOGLE_SCOPES.youtube) }),
-    calendar: google.calendar({ version: "v3", auth: googleAuth(undefined, GOOGLE_SCOPES.calendar) }),
+/**
+ * Whose Google account the reads run as. Normally the company sign-in; a connector call (lib/mcp) runs as the person
+ * whose access token it brought, so their Gmail, Calendar and Chat are theirs. Everything below that depends on the
+ * account is cached per account.
+ */
+interface GoogleAccount {
+  key: string;
+  clients: Clients;
+}
+const account = new AsyncLocalStorage<GoogleAccount>();
+const accounts = new Map<string, Clients>();
+
+/** Runs `work` reading Google as the owner of `accessToken` instead of the company sign-in. */
+export function asGoogleAccount<T>(accessToken: string, work: () => Promise<T>): Promise<T> {
+  const key = createHash("sha256").update(accessToken).digest("hex").slice(0, 24);
+  let own = accounts.get(key);
+  if (!own) {
+    const auth: Auth.OAuth2Client = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: accessToken });
+    own = clientsFor(() => auth);
+    accounts.set(key, own);
+    // Access tokens live an hour: keep the newest ones only.
+    if (accounts.size > 200) accounts.delete(accounts.keys().next().value!);
+  }
+  return account.run({ key, clients: own }, work);
+}
+
+/** The cache key of the account this read runs as: "" for the company sign-in. */
+function who(): string {
+  return account.getStore()?.key ?? "";
+}
+
+function clientsFor(auth: (scopes: string[]) => ReturnType<typeof googleAuth>): Clients {
+  return {
+    drive: google.drive({ version: "v3", auth: auth(GOOGLE_SCOPES.drive) }),
+    gmail: google.gmail({ version: "v1", auth: auth(GOOGLE_SCOPES.gmail) }),
+    chat: google.chat({ version: "v1", auth: auth(GOOGLE_SCOPES.chat) }),
+    admin: google.admin({ version: "directory_v1", auth: auth(GOOGLE_SCOPES.directory) }),
+    youtube: google.youtube({ version: "v3", auth: auth(GOOGLE_SCOPES.youtube) }),
+    calendar: google.calendar({ version: "v3", auth: auth(GOOGLE_SCOPES.calendar) }),
   };
+}
+
+/** A value cached once per account (see asGoogleAccount), keeping the newest few hundred accounts. */
+function perAccount<T>() {
+  const values = new Map<string, T>();
+  return {
+    get: (key = who()) => values.get(key),
+    set: (value: T, key = who()) => {
+      values.set(key, value);
+      if (values.size > 300) values.delete(values.keys().next().value!);
+    },
+    delete: (key = who()) => values.delete(key),
+  };
+}
+
+let clients: Clients | undefined;
+
+function g(): Clients {
+  const own = account.getStore();
+  if (own) return own.clients;
+  clients ??= clientsFor((scopes) => googleAuth(undefined, scopes));
   return clients;
 }
 
@@ -307,16 +361,21 @@ function focusedSheetText(tables: SheetTable[], focus: string): string {
 
 // ─── Gmail ───────────────────────────────────────────────────────────────
 
-let mailbox: Promise<string> | undefined;
+const mailboxes = perAccount<Promise<string>>();
 
 function myMailbox(): Promise<string> {
-  mailbox ??= g()
-    .gmail.users.getProfile({ userId: "me" })
-    .then((res) => res.data.emailAddress ?? "me")
-    .catch((err) => {
-      mailbox = undefined;
-      throw err;
-    });
+  const key = who();
+  let mailbox = mailboxes.get(key);
+  if (!mailbox) {
+    mailbox = g()
+      .gmail.users.getProfile({ userId: "me" })
+      .then((res) => res.data.emailAddress ?? "me")
+      .catch((err) => {
+        mailboxes.delete(key);
+        throw err;
+      });
+    mailboxes.set(mailbox, key);
+  }
   return mailbox;
 }
 
@@ -396,13 +455,16 @@ function nameOf(user: string | null | undefined): Promise<string> {
 }
 
 function spaceInfo(name: string): Promise<chat_v1.Schema$Space> {
-  let space = spaces.get(name);
+  // Per account: what one person may see of a space says nothing about what another may.
+  const key = `${who()}|${name}`;
+  let space = spaces.get(key);
   if (!space) {
     space = g()
       .chat.spaces.get({ name })
       .then((res) => res.data)
       .catch(() => ({ name }));
-    spaces.set(name, space);
+    spaces.set(key, space);
+    if (spaces.size > 2000) spaces.delete(spaces.keys().next().value!);
   }
   return space;
 }
@@ -501,10 +563,12 @@ export async function threadMessages(thread: string, limit = 30): Promise<string
   return lines.join("\n");
 }
 
-let spaceList: { at: number; spaces: Promise<chat_v1.Schema$Space[]> } | undefined;
+const spaceLists = perAccount<{ at: number; spaces: Promise<chat_v1.Schema$Space[]> }>();
 
 /** The named spaces the signed-in person is in, fetched again every 10 minutes. */
 function namedSpaces(): Promise<chat_v1.Schema$Space[]> {
+  const key = who();
+  let spaceList = spaceLists.get(key);
   if (!spaceList || Date.now() - spaceList.at > 10 * 60_000) {
     const loading = (async () => {
       const all: chat_v1.Schema$Space[] = [];
@@ -517,9 +581,10 @@ function namedSpaces(): Promise<chat_v1.Schema$Space[]> {
       return all;
     })();
     loading.catch(() => {
-      spaceList = undefined;
+      spaceLists.delete(key);
     });
     spaceList = { at: Date.now(), spaces: loading };
+    spaceLists.set(spaceList, key);
   }
   return spaceList.spaces;
 }
@@ -584,8 +649,8 @@ export async function readSpaceMessages(space: string, label?: string, days = 14
 // ─── Google Workspace directory (read-only) ──────────────────────────────
 
 type ViewType = "admin_view" | "domain_public";
-// Admins see full profiles; everyone else only the public ones. Remember which one this sign-in gets.
-let userView: ViewType | undefined;
+// Admins see full profiles; everyone else only the public ones. Remember which one each sign-in gets.
+const views = perAccount<ViewType>();
 
 function httpStatus(err: unknown): number | undefined {
   const e = err as { status?: number; response?: { status?: number } };
@@ -602,13 +667,13 @@ export async function searchPeople(query: string): Promise<SearchResult> {
   let pageToken: string | undefined;
   do {
     let res: Awaited<ReturnType<typeof list>> | undefined;
-    if (userView !== "domain_public") {
+    if (views.get() !== "domain_public") {
       try {
         res = await list("admin_view", pageToken);
-        userView = "admin_view";
+        views.set("admin_view");
       } catch (err) {
         if (httpStatus(err) !== 403) throw err;
-        userView = "domain_public";
+        views.set("domain_public");
       }
     }
     res ??= await list("domain_public", pageToken);
@@ -618,7 +683,7 @@ export async function searchPeople(query: string): Promise<SearchResult> {
 
   const matched = q ? `match “${q}”` : "are in the directory";
   const suspended = users.filter((u) => u.suspended).length;
-  const breakdown = userView === "admin_view" ? `: ${users.length - suspended} active, ${suspended} suspended` : "";
+  const breakdown = views.get() === "admin_view" ? `: ${users.length - suspended} active, ${suspended} suspended` : "";
   const summary = `${users.length} account(s) ${matched}${breakdown}${pageToken ? ". Only the first 1000 were read." : ". All are listed."}`;
 
   if (users.length <= FULL_RECORDS_UP_TO) {
@@ -1008,7 +1073,7 @@ function moment(value: string | undefined, fallback: Date, endOfDay = false): st
   return Number.isNaN(parsed.getTime()) ? fallback.toISOString() : parsed.toISOString();
 }
 
-let timeZone: Promise<string> | undefined;
+const timeZones = perAccount<Promise<string>>();
 
 /**
  * The time zone every calendar time is shown in: GMT by default, any zone name through
@@ -1017,10 +1082,14 @@ let timeZone: Promise<string> | undefined;
 function displayTimeZone(): Promise<string> {
   const configured = (env("CALENDAR_TIME_ZONE") ?? "GMT").trim();
   if (configured.toLowerCase() !== "auto") return Promise.resolve(configured);
-  timeZone ??= g()
-    .calendar.calendars.get({ calendarId: "primary" })
-    .then((res) => res.data.timeZone ?? "GMT")
-    .catch(() => "GMT");
+  let timeZone = timeZones.get();
+  if (!timeZone) {
+    timeZone = g()
+      .calendar.calendars.get({ calendarId: "primary" })
+      .then((res) => res.data.timeZone ?? "GMT")
+      .catch(() => "GMT");
+    timeZones.set(timeZone);
+  }
   return timeZone;
 }
 
