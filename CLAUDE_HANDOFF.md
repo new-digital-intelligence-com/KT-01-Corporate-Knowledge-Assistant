@@ -205,7 +205,7 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 6. **Google's other connectors need the same preview access.** Gmail (`gmailmcp`), Calendar (`calendarmcp`) and Chat (`chatmcp`, all `…googleapis.com/mcp/v1`) are in the same Workspace Developer Preview Program as Drive. Their APIs also have to be enabled in the GCP project. From 2026-11-11, Google rejects OAuth clients not marked for an AI agent; the new client is one.
 7. **The meeting feature built on 2026-09-23** (a hard invite check in code, private replies in spaces) was replaced by this design before it went live. It is kept in `git stash` ("2026-09-23 meeting feature").
 8. **Retire Vercel** when the user says so. Nothing points at it any more.
-9. **Dependabot:** GitHub listed 11 vulnerability alerts on the repo when we pushed on 2026-10-17. Not looked at yet.
+9. **Dependabot:** GitHub lists 12 vulnerability alerts on the repo as of 2026-10-17 (1 critical, 4 high, 5 moderate, 2 low). Not looked at yet.
 
 ## Gotchas
 
