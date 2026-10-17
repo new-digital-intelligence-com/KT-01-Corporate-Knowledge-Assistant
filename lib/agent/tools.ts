@@ -308,6 +308,7 @@ export function toolProgress(name: string): string {
   const known = TOOLS.find((t) => t.definition.name === name);
   if (known) return known.progress;
   if (name.startsWith("fireflies")) return "Checking meetings…";
+  if (name.startsWith("slack_")) return "Checking Slack…";
   // The built-in read, grep and glob only ever read the Drive map skill in the agent's sandbox.
   if (name === "read" || name === "grep" || name === "glob") return "Checking the Drive map…";
   return "Working on it…";

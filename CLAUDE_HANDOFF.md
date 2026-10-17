@@ -26,6 +26,7 @@ The owner is Helmi Lakhder. The agent reads Google as the person asking, and Fir
   - **The Managed Agent design (decided 2026-10-16):**
     - Every source comes through a connector (MCP server), like in Claude Cowork. Don't rebuild what a connector already does.
     - **Fireflies:** Fireflies' own MCP server (`https://api.fireflies.ai/mcp`), signed in with Michael Burian's account. The rule that a meeting is only for the people invited to it lives in the agent's prompt; the user chose that over a hard check in code.
+    - **Slack (decided 2026-10-17):** Slack's own MCP server (`https://mcp.slack.com/mcp`), signed in through the Console with Helmi's Slack account; the sign-in is in the shared vault. Public channels only: seven reading tools are on, and private search, the account's own channel list, canvases, lists, files and every tool that writes are off. The prompt keeps the agent to public channels, because a channel id alone doesn't say whether a channel is private.
     - **Everything is per person, with no sign-in links (decided 2026-10-17):** Drive, the directory, Gmail, Calendar and Chat. Each person sees exactly what their own account can open.
       - Michael (super admin) approved domain-wide delegation, read-only, for the bot's service account (client ID `111236854153815010074`), with these scopes: `gmail.readonly`, `calendar.readonly`, `chat.spaces.readonly`, `chat.messages.readonly`, `drive.readonly`, `admin.directory.user.readonly`, `admin.directory.group.readonly`, `admin.directory.group.member.readonly`.
       - The agent's tools act as the person asking, and only ever as the verified sender of the Chat message (`lib/agent/people.ts`). Each tool asks only for its own scopes, so a scope that isn't approved breaks only that tool.
@@ -33,7 +34,7 @@ The owner is Helmi Lakhder. The agent reads Google as the person asking, and Fir
       - Chat is per person so the agent can always read the conversation it's asked in.
       - The Fireflies connector stays on Michael's account.
     - **Catalog, tracker and YouTube demo links** are read straight from their Drive files (the YouTube links are in a master database sheet), not through special tools. The directory stays one of our own tools: no connector exists for it.
-    - Only read tools are switched on in every connector. Fireflies' and Google's servers can also change things (share, move, send); those stay off.
+    - Only read tools are switched on in every connector. Fireflies', Google's and Slack's servers can also change things (share, move, send, post); those stay off.
 - Answer style the user asked for:
   - English unless another language is requested.
   - Sources in a collapsible "Sources (n)" card.
@@ -109,12 +110,13 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 - **Resources** in the Anthropic workspace of `ANTHROPIC_API_KEY`, created 2026-10-16:
   - agent `agent_01ELBePtUXGydeRpFcj7mUuJ` ("NDI Knowledge Assistant", `claude-opus-5-5`, effort medium);
   - environment `env_01DzNSSKGnSf1YFLqWRq6pMy` (cloud, limited networking, MCP servers allowed; no sandbox tools);
-  - vault `vlt_011Cg6jEMrVRfz13866ECxRn` ("shared connectors"), holding Michael's Fireflies key as a static bearer credential, and Helmi's Google Drive sign-in as an OAuth credential that Anthropic refreshes;
+  - vault `vlt_011Cg6jEMrVRfz13866ECxRn` ("shared connectors"), holding Michael's Fireflies key as a static bearer credential, and Helmi's Google Drive and Slack sign-ins as OAuth credentials that Anthropic refreshes (Slack's was made with the Console's Connect button);
   - skill `skill_01KcXiyVpoRynvQ2tm658TS3` (`ndi-drive-map`), the Drive map.
 - **The Drive map is a skill**, not part of the prompt (the user's choice, 2026-10-17): `SKILL.md` (organisation, where to look, the most important files, files outside the shared drive), `key-files.md` and `clients.md`. `lib/agent/skill.ts` builds it from the database. The prompt holds only the rules, about 3k characters, where the map used to make it 35k. Skills need the built-in read tool, so `read`, `grep` and `glob` are on; `bash`, `write`, `edit` and the web tools are off.
-- **Update the agent:** edit `lib/agent/prompt.ts`, `skill.ts` or `tools.ts`, then run `npm run managed-agent`. Each run uploads a new skill version from the current Drive map and makes a new agent version. Run it again after the map changes.
+- **Update the agent:** edit `lib/agent/prompt.ts`, `skill.ts` or `tools.ts`, then run `npm run managed-agent`. Each run uploads a new skill version from the current Drive map and makes a new agent version. Run it again after the map changes. Changes made in the Console only last until the next run, which puts the agent back to what the code says, so make lasting changes in the code.
 - **Tools:**
   - Fireflies' read tools only (`fireflies_search`, `fireflies_fetch`, `fireflies_get_transcripts`, …). Its sharing, moving, renaming and privacy tools are off.
+  - Slack's public-channel reading tools only: `slack_search_public`, `slack_search_channels`, `slack_read_channel`, `slack_read_thread`, `slack_search_users`, `slack_read_user_profile`, `slack_list_channel_members`. Its other 20 tools are off: they search private messages, list the account's channels, read canvases, lists and files, or post, schedule, draft, react, create channels and lists, edit canvases and upload files. The script attaches Slack only when its sign-in is in the shared vault.
   - Our custom tools from `lib/agent/tools.ts`. Each call pauses the session until `askAgent` sends the result back.
 - **Sessions:** one per conversation and person, kept in `agent_sessions` (conversation, asker, session_id). It holds the whole conversation, so follow-ups work without our own memory. A session keeps the agent version it started with, so after an update the next message starts a new session; the conversation's memory starts over then. Sessions and their history stay in the Console (Managed Agents → Sessions), which is the place to debug an answer.
 - **Tests on 2026-10-16** (run as Helmi in a DM):
@@ -125,6 +127,10 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
   - follow-up answered from memory 6 s;
   - a made-up colleague got no meeting content.
 - **Tests on 2026-10-17**, each tool reading as the person asking: Calendar 10 s, Gmail 20 s, Chat 24 s, Drive 17 s, directory 11 s.
+- **Slack tests on 2026-10-17** (agent version 13):
+  - as Helmi, a public-channel question was answered from Slack;
+  - as a made-up colleague, posting was refused, a search "including private channels and DMs" used public search only, and a DM question and a DM link were refused without any Slack call;
+  - "every channel Helmi is in, private ones too" listed only public channels, but took 139 member lookups.
 
 ## Hosting and deploy
 
@@ -164,6 +170,7 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 **Managed Agent: live for everyone since 2026-10-17.**
 - Railway has `ASSISTANT_ENGINE=agent`, so every message to the bot in Google Chat goes to the agent (agent version 9 at the switch).
 - Every Google tool reads as the person asking; Fireflies reads as Michael, with the invitee rule in the prompt.
+- Slack reads as Helmi, public channels only, since agent version 13.
 - To switch everyone back to the old pipeline, delete `ASSISTANT_ENGINE` on Railway. It redeploys in about a minute.
 - Hosting moved to Railway the same day, and the Chat app's HTTP endpoint points there.
 
@@ -212,7 +219,7 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 - The NDI Tools sheet and Corporate Information sheet live **outside** the NDI shared drive, so Drive search (limited to `GOOGLE_DRIVE_ID`) won't find them. Open them by id; they are in the Drive map.
 - Vercel functions: `maxDuration = 300` on the Chat route. The answer runs in `after()`.
 - Chat allows about 1 write per second per space. Replies are capped at about 30 KB.
-- The production `ANTHROPIC_API_KEY` was replaced on 2026-10-12. Keep `.env.local` on the same key: the Managed Agent's resources live in that key's workspace, so a key from another workspace can't see them.
+- The production `ANTHROPIC_API_KEY` was replaced on 2026-10-12. Keep `.env.local` on the same key: the Managed Agent's resources live in that key's workspace, so a key from another workspace can't see them. The same goes for people in the Console: the agent, vault and sessions show up only in that workspace, so someone who can't see them is most likely looking at another workspace.
 - `askAgent` gives up after 240 s and interrupts the session, to stay inside Vercel's 300 s. On Railway this could go higher.
 - Vercel's env list endpoint returns **encrypted blobs**, even with `decrypt=true`; they happen to look like base64 JSON. For a real value, read one variable at a time: `GET /v1/projects/{id}/env/{envId}`.
 - Never commit Drive file names or ids, client details or anything from `data/` or `secrets/`.

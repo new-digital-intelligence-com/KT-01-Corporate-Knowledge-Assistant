@@ -31,6 +31,20 @@ const FIREFLIES_READ_TOOLS = [
   "fireflies_get_channel",
   "fireflies_get_soundbites",
 ];
+// Slack's own server, signed in once in the Console with Helmi's Slack account; that sign-in sits in the shared vault.
+// Only public channels: private search, the account's own channel list, canvases, lists and files are off, since
+// those can be private, and the prompt keeps the agent to public channels. Slack's other tools post, schedule, create
+// channels, react, edit canvases and lists or upload files; those stay off too.
+const SLACK_MCP = "https://mcp.slack.com/mcp";
+const SLACK_PUBLIC_READ_TOOLS = [
+  "slack_search_public",
+  "slack_search_channels",
+  "slack_read_channel",
+  "slack_read_thread",
+  "slack_search_users",
+  "slack_read_user_profile",
+  "slack_list_channel_members",
+];
 
 async function main() {
   const client = new Anthropic();
@@ -61,7 +75,7 @@ async function main() {
 
   // The Drive map names internal files, so it is read from the database here and goes into the agent's
   // configuration on Anthropic's side, never into the code. Re-run this script after the map changes.
-  // The shared vault holds the company-wide sign-ins: Fireflies (Michael) and Google Drive (Helmi).
+  // The shared vault holds the company-wide sign-ins: Fireflies (Michael), Google Drive and Slack (Helmi).
   await client.beta.vaults.update(firefliesVault, { display_name: "Knowledge Assistant: shared connectors" });
   const existing: string[] = [];
   for await (const credential of client.beta.vaults.credentials.list(firefliesVault)) {
@@ -95,6 +109,8 @@ async function main() {
     console.log("Google Drive sign-in stored in the shared vault");
   }
   const driveConnector = env("GOOGLE_DRIVE_MCP") === "on";
+  // Slack is signed in through the Console's Connect button, so it is attached only once that sign-in is in the vault.
+  const slack = existing.includes(SLACK_MCP);
 
   // The Drive map names internal files, so it is read from the database here and uploaded as a skill to Anthropic,
   // never put in the code. Each run uploads a new version; run again after the map changes.
@@ -111,17 +127,18 @@ async function main() {
     console.log(`MA_DRIVE_SKILL_ID=${skillId}   (new)`);
   }
 
-  const system = agentPrompt(env("GOOGLE_DRIVE_ID"), driveConnector);
+  const system = agentPrompt(env("GOOGLE_DRIVE_ID"), driveConnector, slack);
   console.log(`prompt: ${system.length} characters`);
 
   const config = {
     name: "NDI Knowledge Assistant",
-    description: "Claude in Google Chat for NDI: company knowledge from Drive, Gmail, Calendar, Chat and Fireflies, read-only.",
+    description: "Claude in Google Chat for NDI: company knowledge from Drive, Gmail, Calendar, Chat, Fireflies and Slack, read-only.",
     model: { id: "claude-opus-5-5", effort: "medium" as const },
     system,
     mcp_servers: [
       { type: "url" as const, name: "fireflies", url: FIREFLIES_MCP },
       { type: "url" as const, name: "google_drive", url: GOOGLE_DRIVE_MCP },
+      ...(slack ? [{ type: "url" as const, name: "slack", url: SLACK_MCP }] : []),
     ],
     skills: [{ type: "custom" as const, skill_id: skillId, version: "latest" }],
     tools: [
@@ -144,11 +161,22 @@ async function main() {
         // Only reading, never create_file or copy_file; and nothing at all until Google accepts the project.
         configs: driveConnector ? GOOGLE_DRIVE_READ_TOOLS.map((name) => ({ name, enabled: true })) : [],
       },
+      ...(slack
+        ? [
+            {
+              type: "mcp_toolset" as const,
+              mcp_server_name: "slack",
+              default_config: { enabled: false, permission_policy: { type: "always_allow" as const } },
+              configs: SLACK_PUBLIC_READ_TOOLS.map((name) => ({ name, enabled: true })),
+            },
+          ]
+        : []),
       // With Google's Drive connector on, our own Drive search and reading step aside.
       ...AGENT_TOOLS.filter((tool) => !driveConnector || (tool.name !== "search_drive" && tool.name !== "read_drive_file")),
     ],
   };
   console.log(`Google Drive connector: ${driveConnector ? "on (our Drive tools removed)" : "attached, tools off until GOOGLE_DRIVE_MCP=on"}`);
+  console.log(`Slack connector: ${slack ? "public channels only, read-only" : "not attached (connect Slack in the Console first)"}`);
 
   const agentId = env("MA_AGENT_ID");
   const agent = agentId ? await client.beta.agents.update(agentId, config) : await client.beta.agents.create(config);

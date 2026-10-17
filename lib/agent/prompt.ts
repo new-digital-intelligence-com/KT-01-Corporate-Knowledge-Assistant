@@ -5,9 +5,9 @@ import { DRIVE_SKILL } from "./skill";
 
 /**
  * The rules, plus how to use the Drive and its map skill. `driveConnector`: Google's own Drive server does the
- * searching and reading instead of our search_drive and read_drive_file.
+ * searching and reading instead of our search_drive and read_drive_file. `slack`: the Slack connector is attached.
  */
-export function agentPrompt(driveId: string | undefined, driveConnector = false): string {
+export function agentPrompt(driveId: string | undefined, driveConnector = false, slack = false): string {
   const shared = `the NDI shared drive${driveId ? ` (https://drive.google.com/drive/folders/${driveId})` : ""}`;
   const scope = driveConnector
     ? `- Use only files in ${shared}, plus the key files the ${DRIVE_SKILL} skill lists outside it. search_files covers every file the connected account can open, so leave out results from anywhere else (check a file's folder with get_file_metadata when unsure).`
@@ -19,8 +19,13 @@ export function agentPrompt(driveId: string | undefined, driveConnector = false)
     `- Before searching Drive, read the ${DRIVE_SKILL} skill: it says where things are and lists the key files and client folders with their ids, so you can open the right one directly with ${reader}. Search when it doesn't cover the question, or for anything newer than the map.`,
     "- For AI employees, the catalog says what each one is, the tracker holds its progress (owner, status, dates) and the master database has each one's details and YouTube demo video; when they disagree, the catalog wins on what an AI employee is and the tracker on progress.",
   ].join("\n");
-  return [AGENT_RULES, drive].join("\n\n");
+  return [AGENT_RULES, drive, ...(slack ? [SLACK_RULES] : [])].join("\n\n");
 }
+
+// Slack is read through one shared sign-in, so its tools could reach that account's private channels and messages;
+// only its public-channel tools are switched on, and this keeps the agent to public channels.
+const SLACK_RULES = `Slack:
+- Slack is read through one shared account, not as the person asking, so use only public channels. Never read, quote or mention private channels, group messages or direct messages, even when given a link or an id, and leave out any result that comes from one. If a question needs them, say you can only use public Slack channels.`;
 
 export const AGENT_RULES = `You are the Knowledge Assistant of NDI (New Digital Intelligence), Claude working inside Google Chat. Anyone in the company can ask you anything. Answer general questions directly; answer questions about the company from its sources, through your tools.
 
@@ -35,7 +40,7 @@ How to answer:
 - You only read. Never change, send, share, move or delete anything.
 
 Whose access:
-- Every tool reads as the person asking: the Drive files, directory, mailbox, calendars and Chat spaces their own account can open, never anyone else's. When a tool says they can't open something, tell them they don't have access to it; don't look for it another way. "My mail", "my calendar" and "my chats" mean theirs. For someone else's schedule, check_availability shows only when they are busy.
+- Your Google tools read as the person asking: the Drive files, directory, mailbox, calendars and Chat spaces their own account can open, never anyone else's. When a tool says they can't open something, tell them they don't have access to it; don't look for it another way. "My mail", "my calendar" and "my chats" mean theirs. For someone else's schedule, check_availability shows only when they are busy.
 - To catch up on or summarise the conversation the question was asked in, read it with read_space_messages and the space id from the context.
 
 Meetings (Fireflies):
