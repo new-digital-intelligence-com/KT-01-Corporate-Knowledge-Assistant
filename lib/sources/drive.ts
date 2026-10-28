@@ -98,13 +98,36 @@ export async function fileText(drive: drive_v3.Drive, fileId: string, mimeType: 
   }
 
   const res = await drive.files.get({ fileId, alt: "media", supportsAllDrives: true }, { responseType: "arraybuffer" });
-  const bytes = new Uint8Array(res.data as unknown as ArrayBuffer);
+  return documentText(new Uint8Array(res.data as unknown as ArrayBuffer), mimeType);
+}
+
+/** The text of a file's bytes: PDF, Word, PowerPoint, Excel, HTML or plain text. */
+export async function documentText(bytes: Uint8Array, mimeType: string): Promise<string> {
   if (mimeType === PDF) return (await extractText(bytes, { mergePages: true })).text;
   if (mimeType === DOCX) return (await mammoth.extractRawText({ buffer: Buffer.from(bytes) })).value;
   if (mimeType === PPTX) return (await pptxSlides(bytes)).map((text, i) => `Slide ${i + 1}:\n${text}`).join("\n\n");
   if (mimeType === XLSX) return spreadsheetText(await xlsxSheets(bytes));
   const text = new TextDecoder().decode(bytes);
   return mimeType === HTML ? htmlToText(text) : text;
+}
+
+const BY_EXTENSION: Record<string, string> = {
+  pdf: PDF,
+  docx: DOCX,
+  pptx: PPTX,
+  xlsx: XLSX,
+  html: HTML,
+  htm: HTML,
+  txt: "text/plain",
+  md: "text/markdown",
+  csv: "text/csv",
+};
+
+/** The type documentText reads an attached file as, or undefined when it can't. Mail often sends files as octet-stream. */
+export function readableType(filename: string, mimeType: string | null | undefined): string | undefined {
+  const declared = (mimeType ?? "").toLowerCase();
+  if ([PDF, DOCX, PPTX, XLSX, HTML, ...PLAIN].includes(declared)) return declared;
+  return BY_EXTENSION[filename.toLowerCase().split(".").pop() ?? ""];
 }
 
 /** `'<id>' in parents` only matches direct children, so walk the folder tree first. */

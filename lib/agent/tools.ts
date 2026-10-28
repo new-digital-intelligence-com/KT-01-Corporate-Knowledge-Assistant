@@ -181,7 +181,9 @@ const TOOLS: AgentTool[] = [
   {
     definition: tool(
       "read_email_thread",
-      "Read a whole email thread from the mailbox of the person asking, by its id from search_gmail: every message with its time, sender, recipients and text.",
+      "Read a whole email thread from the mailbox of the person asking, by its id from search_gmail: every message with its " +
+        `time, sender, recipients and text, and the text of its attached PDF, Word, Excel, PowerPoint and text files, ${READ_PARTS} ` +
+        "parts at a time (the result says when more parts remain; ask for them with start).",
       {
         thread_id: { type: "string", description: "The thread id from search_gmail" },
         start: { type: "integer", minimum: 1, description: "The part to start from (default 1)" },

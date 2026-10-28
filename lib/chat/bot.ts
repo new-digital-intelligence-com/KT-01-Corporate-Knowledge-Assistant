@@ -1,7 +1,8 @@
+import { PERSON_SCOPES, personAccessToken } from "../agent/people";
 import { AgentError, agentConfigured, askAgent } from "../agent/session";
 import { answerQuestion, describeAssistantError } from "../assistant";
 import { env, envList } from "../config";
-import { liveGoogleAvailable, threadMessages } from "../live";
+import { asGoogleAccount, liveGoogleAvailable, messagesBefore, threadMessages } from "../live";
 import { clip, errorMessage, gmt } from "../text";
 import type { AssistantEvent, FinalAnswer, HistoryTurn } from "../types";
 import { editMessage, getSpace, msSinceLastWrite, postMessage } from "./client";
@@ -31,6 +32,7 @@ interface ChatMessage {
   /** The text without the @mention of the app. */
   argumentText?: string;
   thread?: { name?: string };
+  createTime?: string;
   /** True when the message was posted inside an existing thread. */
   threadReply?: boolean;
   sender?: { type?: string };
@@ -245,6 +247,25 @@ function agentContext(event: ChatEvent): string {
   ].join("\n");
 }
 
+/**
+ * What was said just before the question, read as the person asking: the thread it was asked in, or the latest
+ * messages of the space. Sessions are per person, so this is how the agent knows what it told someone else there and
+ * what "you said" or "above" refers to. A direct message needs none: its session holds the whole conversation.
+ */
+async function earlierMessages(event: ChatEvent, space: string, thread: string | null, asker: string): Promise<string> {
+  const payload = event.chat?.messagePayload;
+  if (payload?.space?.spaceType === "DIRECT_MESSAGE") return "";
+  const before = payload?.message?.createTime ?? new Date().toISOString();
+  const token = await personAccessToken(asker, PERSON_SCOPES.chat);
+  const lines = await asGoogleAccount(token, () =>
+    messagesBefore({ space, thread }, before, thread ? { limit: 30, days: 60, maxChars: 15_000 } : { limit: 20, days: 3, maxChars: 12_000 }),
+  );
+  if (!lines) return "";
+  return thread
+    ? `The messages before mine in the Google Chat thread I'm asking in, oldest first:\n<thread>\n${lines}\n</thread>\n\n`
+    : `The latest messages in this space before mine, oldest first (your own earlier answers are from Knowledge Assistant, maybe to someone else):\n<earlier_messages>\n${lines}\n</earlier_messages>\n\n`;
+}
+
 async function answerWithAgent(a: {
   event: ChatEvent;
   space: string;
@@ -264,16 +285,18 @@ async function answerWithAgent(a: {
   };
 
   const user = a.event.chat?.user;
+  const asker = (user?.email ?? user?.name ?? "unknown").toLowerCase();
   let reply: string | ChatReply;
   let ok = false;
   try {
-    // Asked inside a thread: the agent sees the thread, so "that" or "his idea" make sense.
-    const threadText = a.thread && liveGoogleAvailable() ? await threadMessages(a.thread).catch(() => "") : "";
-    const thread = threadText ? `This is the Google Chat thread I'm asking in, oldest message first:\n<thread>\n${threadText}\n</thread>\n\n` : "";
+    const earlier = await earlierMessages(a.event, a.space, a.thread, asker).catch((err) => {
+      a.log(`earlier messages not read (${errorMessage(err)})`);
+      return "";
+    });
     const text = await askAgent({
       conversation: a.conversation,
-      asker: (user?.email ?? user?.name ?? "unknown").toLowerCase(),
-      prompt: `${agentContext(a.event)}\n\n${thread}${a.question}`,
+      asker,
+      prompt: `${agentContext(a.event)}\n\n${earlier}${a.question}`,
       onProgress: progress,
     });
     reply = renderAgentReply(text);

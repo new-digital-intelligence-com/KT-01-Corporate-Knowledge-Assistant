@@ -1,6 +1,6 @@
 # Claude handoff: KT-01 Corporate Knowledge Assistant
 
-Read this first when you pick up this project in a new session. It records what the project is, how it runs, the decisions already taken, and what is left. Last updated: 2026-10-17.
+Read this first when you pick up this project in a new session. It records what the project is, how it runs, the decisions already taken, and what is left. Last updated: 2026-10-28.
 
 ## What it is
 
@@ -50,9 +50,9 @@ Next.js 16 (read `node_modules/next/dist/docs` before changing Next code; see AG
 | Path | Role |
 |---|---|
 | `app/api/google-chat/route.ts` | Chat add-on HTTP endpoint. Verifies the Google ID token (audience `CHAT_ENDPOINT_URL`, email `CHAT_ADDON_SERVICE_ACCOUNT`), returns `{}` at once, and handles the event in `after()`. |
-| `lib/chat/bot.ts` | Event handling: domain and external-space checks, posts a placeholder, reads the thread and memory, calls the Managed Agent (for everyone with `ASSISTANT_ENGINE=agent`, or for `AGENT_TRIAL_USERS`) or else `answerQuestion`, and edits the placeholder with the answer. |
+| `lib/chat/bot.ts` | Event handling: domain and external-space checks, posts a placeholder, reads the thread and memory (for the agent: the messages just before the question, from its thread or the space, read as the person asking), calls the Managed Agent (for everyone with `ASSISTANT_ENGINE=agent`, or for `AGENT_TRIAL_USERS`) or else `answerQuestion`, and edits the placeholder with the answer. |
 | `lib/agent/session.ts` | The Managed Agent's runtime: one session per conversation and person, kept in Postgres (`agent_sessions`). It sends the question, runs our tools when the agent calls them, and returns the answer, catching up after a dropped stream. |
-| `lib/agent/tools.ts` | The agent's own tools, run in our code, all as the person asking: `search_drive`, `read_drive_file`, `search_people`, `search_groups`, `list_group_members`, `search_gmail`, `read_email_thread`, `search_calendar`, `list_calendars`, `check_availability`, `search_chat`, `read_chat_thread`, `read_space_messages`. |
+| `lib/agent/tools.ts` | The agent's own tools, run in our code, all as the person asking: `search_drive`, `read_drive_file`, `search_people`, `search_groups`, `list_group_members`, `search_gmail`, `read_email_thread` (with the text of attached PDF, Word, Excel, PowerPoint and text files, since 2026-10-28), `search_calendar`, `list_calendars`, `check_availability`, `search_chat`, `read_chat_thread`, `read_space_messages`. |
 | `lib/agent/people.ts` | Short-lived access tokens for the person asking, through domain-wide delegation; company addresses only. `asGoogleAccount()` in `lib/live.ts` runs the existing Google code as that token, with every per-account cache kept per account. |
 | `lib/agent/prompt.ts`, `skill.ts`, `scripts/managed-agent.ts` | The agent's rules, the Drive map skill built from the database, and the setup script (`npm run managed-agent`) that creates or updates the agent, its skill and its connectors. |
 | `lib/chat/render.ts`, `client.ts` | Chat message and card rendering; posting and editing as the bot service account (chat.bot scope), with retries. |
@@ -119,6 +119,8 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
   - Slack's public-channel reading tools only: `slack_search_public`, `slack_search_channels`, `slack_read_channel`, `slack_read_thread`, `slack_search_users`, `slack_read_user_profile`, `slack_list_channel_members`. Its other 20 tools are off: they search private messages, list the account's channels, read canvases, lists and files, or post, schedule, draft, react, create channels and lists, edit canvases and upload files. The script attaches Slack only when its sign-in is in the shared vault.
   - Our custom tools from `lib/agent/tools.ts`. Each call pauses the session until `askAgent` sends the result back.
 - **Sessions:** one per conversation and person, kept in `agent_sessions` (conversation, asker, session_id). It holds the whole conversation, so follow-ups work without our own memory. A session keeps the agent version it started with, so after an update the next message starts a new session; the conversation's memory starts over then. Sessions and their history stay in the Console (Managed Agents → Sessions), which is the place to debug an answer.
+  - Because sessions are per person, one person's session doesn't know what the agent told someone else in the same space. So since 2026-10-28 each space question carries the messages just before it (`earlierMessages()` in `lib/chat/bot.ts`): the last 20 messages of 3 days, at most 12k characters, or the last 30 of its thread. They're read as the person asking, so only what they can see in Chat is passed on. Nobody's mail or files carry over.
+  - To debug without spending credit, read a session's events (`client.beta.sessions.events.list`). An answer of "The agent stopped (retries_exhausted)" hides the cause, which is in the `session.error` event before it. On 2026-10-26 it was `billing_error`: the prepaid credit balance (Console → Settings → Billing) was at zero. That's separate from the monthly spend limit.
 - **Tests on 2026-10-16** (run as Helmi in a DM):
   - catalog question 20 s;
   - pricing file and its owners 21 s;
@@ -173,6 +175,15 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 - Slack reads as Helmi, public channels only, since agent version 13.
 - To switch everyone back to the old pipeline, delete `ASSISTANT_ENGINE` on Railway. It redeploys in about a minute.
 - Hosting moved to Railway the same day, and the Chat app's HTTP endpoint points there.
+- **2026-10-28**, after three weak answers in a client project space:
+  - The agent can't open an email's attached PDF.
+  - It used a Drive draft instead of the proposal sent by email, and said "no such email" after two narrow searches.
+  - It didn't know what it had told one colleague when another quoted it.
+  - Fixes:
+    - attachments are now read;
+    - space questions now carry the messages just before them;
+    - the prompt has new "Finding things" and "Earlier messages" rules (search again with other words, the sent version beats a Drive draft, someone else's source can't be opened for this person), and nested sub-points.
+  - These are tested by calling the tools directly as Helmi; no agent questions were spent. Reading as another person locally is blocked by Claude Code's safety check, so test as Helmi.
 
 **Done and live:**
 - Hosting moved to the new Vercel account (2026-09-19). The old project was deleted, the Chat app's HTTP endpoint URL now points at the new URL, and a real Chat message was answered from it.

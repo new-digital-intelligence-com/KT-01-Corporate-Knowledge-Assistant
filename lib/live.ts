@@ -13,7 +13,7 @@ import {
 import { env } from "./config";
 import type { ChunkRow } from "./db";
 import { codePattern, employeeCodes, keywords } from "./search";
-import { READABLE_MIME_TYPES, fileText } from "./sources/drive";
+import { READABLE_MIME_TYPES, documentText, fileText, readableType } from "./sources/drive";
 import { pptxSlides, sheetRows, xlsxSheets, type SheetRow, type SheetTable } from "./sources/office";
 import { bodyText, header, messageDate, stripQuoted } from "./sources/gmail";
 import { GOOGLE_SCOPES, directoryNames, googleAuth, userAuthConfigured } from "./sources/google";
@@ -430,17 +430,62 @@ export async function searchGmail(query: string, limit: number): Promise<SearchR
 async function readGmail(item: Found): Promise<Found[]> {
   const id = item.docId.slice("gmail:".length);
   const thread = await g().gmail.users.threads.get({ userId: "me", id, format: "full" });
-  const text = (thread.data.messages ?? [])
-    .map((m) => {
-      const cc = header(m, "Cc");
-      return (
-        `[${gmt(messageDate(m))}] From: ${header(m, "From")}\n` +
+  const read = new Set<string>();
+  const texts = [];
+  // In order, so a file sent again later is read once, where it first appears.
+  for (const m of thread.data.messages ?? []) {
+    const cc = header(m, "Cc");
+    const files = await attachmentTexts(m, read);
+    texts.push(
+      `[${gmt(messageDate(m))}] From: ${header(m, "From")}\n` +
         `To: ${header(m, "To")}${cc ? `\nCc: ${cc}` : ""}\n` +
-        stripQuoted(bodyText(m.payload))
-      );
-    })
-    .join("\n\n");
-  return pieces(item, text);
+        stripQuoted(bodyText(m.payload)) +
+        files.map((f) => `\n\n${f}`).join(""),
+    );
+  }
+  return pieces(item, texts.join("\n\n"));
+}
+
+/** Attachments read per thread; any more are only listed by name. */
+const MAX_ATTACHMENTS = 8;
+
+/**
+ * A message's attached files: the text of each PDF, Word, PowerPoint, Excel or text file, and the names of the others.
+ * Images shown inside the email (logos in a signature) are left out. `read` holds the files already read in this thread.
+ */
+async function attachmentTexts(message: gmail_v1.Schema$Message, read: Set<string>): Promise<string[]> {
+  const files: gmail_v1.Schema$MessagePart[] = [];
+  const walk = (part: gmail_v1.Schema$MessagePart | undefined) => {
+    if (!part) return;
+    const inline = part.headers?.some((h) => h.name?.toLowerCase() === "content-id");
+    if (part.filename && (part.body?.attachmentId || part.body?.data) && !(inline && part.mimeType?.startsWith("image/"))) files.push(part);
+    part.parts?.forEach(walk);
+  };
+  walk(message.payload);
+
+  return Promise.all(
+    files.map(async (part) => {
+      const name = part.filename!;
+      const size = Number(part.body?.size ?? 0);
+      const label = `Attachment “${name}”`;
+      const key = `${name}|${size}`;
+      if (read.has(key)) return `${label}: the same file as attached earlier in this thread.`;
+      const type = readableType(name, part.mimeType);
+      if (!type) return `${label} (${part.mimeType || "unknown type"}): this type of file can't be read.`;
+      if (size > MAX_FILE_BYTES) return `${label}: larger than 20 MB, so it wasn't read.`;
+      if (read.size >= MAX_ATTACHMENTS) return `${label}: not read, as this thread has more than ${MAX_ATTACHMENTS} attachments.`;
+      read.add(key);
+      try {
+        const data =
+          part.body?.data ??
+          (await g().gmail.users.messages.attachments.get({ userId: "me", messageId: message.id!, id: part.body!.attachmentId! })).data.data;
+        const text = data ? (await documentText(new Uint8Array(Buffer.from(data, "base64url")), type)).trim() : "";
+        return text ? `${label}, its full text:\n${text}` : `${label}: it has no readable text (perhaps a scan).`;
+      } catch {
+        return `${label}: it couldn't be read.`;
+      }
+    }),
+  );
 }
 
 // ─── Google Chat ─────────────────────────────────────────────────────────
@@ -560,6 +605,30 @@ export async function threadMessages(thread: string, limit = 30): Promise<string
     pageToken = res.data.nextPageToken ?? undefined;
   } while (pageToken && messages.length < 1000);
   const lines = await Promise.all(messages.filter((m) => messageText(m)).slice(-limit).map(messageLine));
+  return lines.join("\n");
+}
+
+/**
+ * The messages just before `before` (a message's create time) in a space's main conversation or one thread, as
+ * "[date] name: text" lines, oldest first: the newest `limit` from the last `days` days, at most `maxChars` in all.
+ */
+export async function messagesBefore(
+  where: { space: string; thread?: string | null },
+  before: string,
+  { limit = 20, days = 3, maxChars = 15_000 } = {},
+): Promise<string> {
+  const since = new Date(Math.min(Date.parse(before) || Date.now(), Date.now()) - days * 86_400_000).toISOString();
+  const filter = `createTime > "${since}" AND createTime < "${before}"${where.thread ? ` AND thread.name = ${where.thread}` : ""}`;
+  const res = await g().chat.spaces.messages.list({ parent: where.space, filter, orderBy: "createTime desc", pageSize: limit });
+  const lines: string[] = [];
+  let used = 0;
+  for (const m of res.data.messages ?? []) {
+    if (!messageText(m)) continue;
+    const line = clip(await messageLine(m), 3_000);
+    if (used + line.length > maxChars) break;
+    used += line.length;
+    lines.unshift(line);
+  }
   return lines.join("\n");
 }
 
