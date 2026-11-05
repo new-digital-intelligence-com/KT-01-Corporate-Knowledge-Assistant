@@ -5,7 +5,7 @@ import { clip, errorMessage } from "./text";
 
 // A map of the company's Google Drive: how it is organised, where to look for what, and its key files with
 // ids, so the assistant can open the right file instead of searching blindly. It names internal files and
-// clients, so it lives in the private database (Supabase table knowledge_map, row "drive-map"), never in the
+// clients, so it lives in the private database (table knowledge_map, row "drive-map"), never in the
 // code. Without a database it is read from data/drive-map.json, which is kept out of git.
 //
 //   create table knowledge_map (id text primary key, content jsonb not null, updated_at timestamptz not null default now());

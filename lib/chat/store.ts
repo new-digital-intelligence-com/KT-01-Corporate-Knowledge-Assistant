@@ -2,11 +2,10 @@ import { getDb } from "../db";
 import { postgres } from "../postgres";
 import type { HistoryTurn } from "../types";
 
-// Conversation memory and delivery dedupe. A Postgres database (Supabase) when DATABASE_URL is set: it
-// survives restarts and is shared by every Vercel instance. Otherwise the local SQLite file, which on
-// Vercel is wiped regularly.
+// Conversation memory and delivery dedupe. The Postgres database when DATABASE_URL is set: it survives
+// restarts and redeploys. Otherwise the local SQLite file, which a redeploy wipes.
 //
-// Postgres tables (created once in the Supabase SQL editor, row level security on):
+// Postgres tables (created by hand when the database was set up, row level security on):
 //   chat_turns(id identity, conversation, asker, question, answer, status, created_at)
 //   chat_deliveries(id primary key, status, claimed_at)
 

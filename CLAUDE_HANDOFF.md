@@ -1,6 +1,6 @@
 # Claude handoff: KT-01 Corporate Knowledge Assistant
 
-Read this first when you pick up this project in a new session. It records what the project is, how it runs, the decisions already taken, and what is left. Last updated: 2026-10-28.
+Read this first when you pick up this project in a new session. It records what the project is, how it runs, the decisions already taken, and what is left. Last updated: 2026-11-05.
 
 ## What it is
 
@@ -56,7 +56,7 @@ Next.js 16 (read `node_modules/next/dist/docs` before changing Next code; see AG
 | `lib/agent/people.ts` | Short-lived access tokens for the person asking, through domain-wide delegation; company addresses only. `asGoogleAccount()` in `lib/live.ts` runs the existing Google code as that token, with every per-account cache kept per account. |
 | `lib/agent/prompt.ts`, `skill.ts`, `scripts/managed-agent.ts` | The agent's rules, the Drive map skill built from the database, and the setup script (`npm run managed-agent`) that creates or updates the agent, its skill and its connectors. |
 | `lib/chat/render.ts`, `client.ts` | Chat message and card rendering; posting and editing as the bot service account (chat.bot scope), with retries. |
-| `lib/chat/store.ts`, `lib/postgres.ts` | Conversation memory and delivery dedupe in Supabase Postgres (`DATABASE_URL`), with a SQLite fallback. |
+| `lib/chat/store.ts`, `lib/postgres.ts` | Conversation memory and delivery dedupe in Postgres (`DATABASE_URL`, the Railway Postgres in the KT-01 project), with a SQLite fallback. |
 | `lib/assistant.ts` | The answer pipeline: tool definitions, system prompt, tool loop, fact check, rewrite, final citation formatting. |
 | `lib/live.ts` | All live Google reads: Drive search and read (paged, with focus), Gmail, Chat search, space messages, directory, groups, admin roles, YouTube, Calendar, key documents (catalog and tracker), opening a Drive file or folder by id. |
 | `lib/drive-map.ts`, `scripts/drive-map.ts` | The Drive map (see below). |
@@ -91,7 +91,7 @@ Next.js 16 (read `node_modules/next/dist/docs` before changing Next code; see AG
 
 ### Drive map
 
-A map of the NDI shared drive is stored in Supabase: table `knowledge_map`, row `drive-map`, RLS on. It is not in the repo. It holds:
+A map of the NDI shared drive is stored in the database: table `knowledge_map`, row `drive-map`, RLS on. It is not in the repo. It holds:
 - How the drive is organised, with folder ids.
 - About 30 "where to look" rules.
 - 74 key files with what each holds and who maintains it.
@@ -139,6 +139,11 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 - **Railway (the new host, set up 2026-10-17):** service `[KT-01] knowledge-assistant` (id `8acf5eb2-3d59-4e31-8237-bf66d33a68fc`) in the **KT-01** project of the NDI workspace (id `6f5ceacd-abb7-4484-990a-82a2ffe81ba2`, beside `nsc-knowledge-assistant`), environment production (id `a7b31a41-812e-43d1-a353-503b7f80c2ef`), URL https://kt-01-knowledge-assistant-production.up.railway.app.
   - On 2026-11-05 it moved there from the shared **POCs** project, with the same settings, variables and URL; this folder is linked to the new project. The old copy in POCs was deleted on 2026-11-05.
   - It builds the `Dockerfile` (Next.js standalone server, port 8080), and Railway deploys every push to `main` from GitHub by itself; never deploy with `railway up`. There's no 300 s limit as on Vercel.
+  - **Database (since 2026-11-05):** the `Postgres` service in the same project (id `411eb22e-c918-4be5-99c1-670c9fa960b9`, Postgres 18 with SSL, europe-west4 like the bot, data on a volume).
+    - The bot's `DATABASE_URL` is the reference `${{Postgres.DATABASE_URL}}`, so it goes over Railway's private network (`postgres.railway.internal`).
+    - The Postgres service has a public TCP address for local scripts (`npm run drive-map`, `npm run managed-agent`): its `DATABASE_PUBLIC_URL`, which `.env.local` uses as `DATABASE_URL`.
+    - It holds the four tables (`agent_sessions`, `knowledge_map`, `chat_turns`, `chat_deliveries`), copied from Supabase on 2026-11-05; the row counts, the Drive map and the sessions were checked identical.
+    - The old Supabase database stays as a fallback until about 2026-11-12; its address is in `.env.local` as `SUPABASE_DATABASE_URL`. To roll back, set the bot's `DATABASE_URL` to it on Railway, after copying back any rows written since.
   - Its variables are production's, copied from Vercel, plus the Managed Agent's, with `CHAT_ENDPOINT_URL` set to the Railway URL and `ASSISTANT_ENGINE=agent`. List them with `railway variable list --service "[KT-01] knowledge-assistant"` (that prints values; don't paste them anywhere).
   - The Railway CLI is logged in as Helmi. From Node on Windows, call `C:/Users/helmi/AppData/Roaming/npm/node_modules/@railway/cli/bin/railway.exe`: the npm shim can't be spawned.
   - Since 2026-10-17 the Chat app's HTTP endpoint URL points at Railway, and real messages are answered there. Vercel still runs but gets no Chat traffic; retire it when the user says so.
@@ -162,7 +167,7 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 
 ## Checking changes
 
-- `npm install` fails on this machine: `better-sqlite3` is compiled with node-gyp and the installed Visual Studio has no Windows SDK. Use `npm install --ignore-scripts`. Everything works except the local SQLite fallback, which production never uses (`DATABASE_URL` points at Supabase).
+- `npm install` fails on this machine: `better-sqlite3` is compiled with node-gyp and the installed Visual Studio has no Windows SDK. Use `npm install --ignore-scripts`. Everything works except the local SQLite fallback, which production never uses (`DATABASE_URL` points at the Railway Postgres).
 - `npx tsc --noEmit` and `npx eslint lib scripts app`. There is no test suite. On a fresh clone, run `npx next typegen` first, or `tsc` can't find Next's generated `LayoutProps` type.
 - Managed Agent: write a small tsx script outside the repo that loads env with `@next/env` and calls `askAgent({ conversation, asker, prompt, onProgress })` from `lib/agent/session.ts`, with a `<context>` block in the prompt like `agentContext()` in `lib/chat/bot.ts` builds. Use a fresh `conversation` string per test so earlier turns don't carry over.
 - Behaviour testing: write a small tsx script outside the repo that loads env with `@next/env`, calls `answerQuestion(question, [], emit, undefined, { spaceType: "DIRECT_MESSAGE", asker: "Helmi Lakhder" })`, and prints the progress events and `renderAnswer(answer).text`. Run questions that hit each source.
