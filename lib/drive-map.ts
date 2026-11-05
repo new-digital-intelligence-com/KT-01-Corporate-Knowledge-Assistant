@@ -96,7 +96,7 @@ export function driveMapText(map: DriveMap): string {
       const [holds, useFor] = detail[f.importance] ?? detail[1];
       const who = f.maintained_by ? ` by ${clip(f.maintained_by, 40)}` : "";
       return (
-        `- ${f.name} (id ${f.id}; ${f.path.replace(/^NDI\//, "")}; ${f.status}, ${f.modified}${who}): ` +
+        `- ${f.name} (id ${f.id}; ${f.path.replace(/^NDI\//, "")}; ${f.status}${who}): ` +
         `${holds ? `${clip(f.holds, holds)} ` : ""}Use for: ${clip(f.use_for, useFor)}`
       );
     });

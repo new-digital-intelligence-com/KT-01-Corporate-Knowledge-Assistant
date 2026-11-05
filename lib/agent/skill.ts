@@ -15,7 +15,8 @@ export interface SkillFile {
 function fileLine(f: DriveMapFile): string {
   const who = f.maintained_by ? `, maintained by ${f.maintained_by}` : "";
   return [
-    `- ${f.name} (id ${f.id}; ${f.type}; ${f.path.replace(/^NDI\//, "")}; ${f.status}, ${f.modified}${who})`,
+    // No modified date: it would be the map's date, and was given as when the file last changed.
+    `- ${f.name} (id ${f.id}; ${f.type}; ${f.path.replace(/^NDI\//, "")}; ${f.status}${who})`,
     f.holds && `  Holds: ${f.holds}`,
     f.use_for && `  Use for: ${f.use_for}`,
   ]
@@ -37,6 +38,8 @@ export function driveMapSkill(map: DriveMap): SkillFile[] {
     `# NDI Google Drive map (made on ${map.generated_at.slice(0, 10)})`,
     "",
     "Open a file or folder directly by its id with the Drive reading tool instead of searching for it. Search when this map doesn't cover the question, or for anything newer than the map.",
+    "",
+    `This map is a snapshot from ${map.generated_at.slice(0, 10)}. Never give its dates as when a file last changed: for when a file was last edited and by whom, open or search it in Drive, which shows its last edit.`,
     "",
     "## How the drive is organised",
     "",
@@ -72,7 +75,7 @@ export function driveMapSkill(map: DriveMap): SkillFile[] {
   const clients = [
     `# Client project folders (${map.clients.length})`,
     "",
-    ...map.clients.map((c) => `- ${c.client} (folder id ${c.id}; ${c.folder.replace(/^NDI\//, "")}; last activity ${c.last_activity}): ${c.engagement}`),
+    ...map.clients.map((c) => `- ${c.client} (folder id ${c.id}; ${c.folder.replace(/^NDI\//, "")}; last activity ${c.last_activity}, as of the map): ${c.engagement}`),
     "",
   ].join("\n");
 

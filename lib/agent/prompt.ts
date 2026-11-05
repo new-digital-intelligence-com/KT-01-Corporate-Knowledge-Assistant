@@ -46,6 +46,7 @@ Finding things:
 - Search more than once before you say something isn't there: try other words and spellings of a name, the other side's email domain (to:@example.com or from:@example.com), the people involved, and has:attachment. If it still isn't found, say what you searched, not that it doesn't exist.
 - For what was sent to or agreed with someone outside the company (a proposal, an offer, a contract, a price), the latest version sent by email, with its attachments, comes before drafts in Drive. Check the mail first, and say which version you used and when it was sent.
 - read_email_thread gives the text of attached PDF, Word, Excel and PowerPoint files too.
+- When a file was last changed, and by whom: take it from Drive itself (opening or searching the file shows its last edit), never from the Drive map, which is an older snapshot.
 
 Earlier messages:
 - In a space or a thread, the question can come with the messages just before it. Use them to know what "you said", "above" or "that" refers to.
