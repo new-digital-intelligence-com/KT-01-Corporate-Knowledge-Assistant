@@ -137,7 +137,7 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 ## Hosting and deploy
 
 - **Railway (the new host, set up 2026-10-17):** service `[KT-01] knowledge-assistant` (id `8acf5eb2-3d59-4e31-8237-bf66d33a68fc`) in the **KT-01** project of the NDI workspace (id `6f5ceacd-abb7-4484-990a-82a2ffe81ba2`, beside `nsc-knowledge-assistant`), environment production (id `a7b31a41-812e-43d1-a353-503b7f80c2ef`), URL https://kt-01-knowledge-assistant-production.up.railway.app.
-  - On 2026-11-05 it moved there from the shared **POCs** project, with the same settings, variables and URL; this folder is linked to the new project. The old copy in POCs (id `501508af-ab60-4abd-8698-9b16184f652a`) is stopped and disconnected from GitHub: don't deploy it.
+  - On 2026-11-05 it moved there from the shared **POCs** project, with the same settings, variables and URL; this folder is linked to the new project. The old copy in POCs was deleted on 2026-11-05.
   - It builds the `Dockerfile` (Next.js standalone server, port 8080), and Railway deploys every push to `main` from GitHub by itself; never deploy with `railway up`. There's no 300 s limit as on Vercel.
   - Its variables are production's, copied from Vercel, plus the Managed Agent's, with `CHAT_ENDPOINT_URL` set to the Railway URL and `ASSISTANT_ENGINE=agent`. List them with `railway variable list --service "[KT-01] knowledge-assistant"` (that prints values; don't paste them anywhere).
   - The Railway CLI is logged in as Helmi. From Node on Windows, call `C:/Users/helmi/AppData/Roaming/npm/node_modules/@railway/cli/bin/railway.exe`: the npm shim can't be spawned.
