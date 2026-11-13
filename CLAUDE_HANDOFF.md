@@ -145,7 +145,8 @@ Every hour, the bot posts each new client meeting from Michael's Fireflies to th
   4. If the Claude call fails, the meeting is left for the next run.
 - **Memory:** Postgres table `meeting_uploads` (transcript id, `posted` or `skipped`, client, reason, the Chat message). Each meeting is decided once. A post is claimed in the table before it's sent, so two runs can't post it twice.
 - **What runs it:** the Railway cron service `[KT-01] meeting-uploads-cron` (id `571da0ee-ab2f-4223-9da0-4c94b8d1bcde`) in the KT-01 project.
-  - Image `curlimages/curl:8.11.1`, schedule `0 * * * *` (UTC), never restarted.
+  - It deploys from GitHub like the bot: it builds `cron/Dockerfile` (curl) from `main`, on every push that changes `cron/` (watch path `cron/**`). Schedule `0 * * * *` (UTC), never restarted, no start command (the Dockerfile's `CMD` runs).
+  - These settings live on the Railway service, not in the repo. Railway now rejects `railway.json` config files (deprecated in favour of `.railway/railway.ts`).
   - It POSTs to `JOB_URL`, which is the bot's `/api/cron/meeting-uploads`, with `Authorization: Bearer $CRON_SECRET`.
   - The route runs one pass and returns `{posted, skipped, waiting}`. Its log lines start with `[meetings]`, in the bot service's logs.
   - Each run looks at the meetings of the last 2 days only.
