@@ -12,7 +12,8 @@
     "chat-bot": "tsx scripts/chat-bot.ts",
     "google-login": "tsx scripts/google-login.ts",
     "drive-map": "tsx scripts/drive-map.ts",
-    "managed-agent": "tsx scripts/managed-agent.ts"
+    "managed-agent": "tsx scripts/managed-agent.ts",
+    "meeting-uploads": "tsx scripts/meeting-uploads.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
