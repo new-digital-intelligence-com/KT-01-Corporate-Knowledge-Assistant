@@ -1,6 +1,6 @@
 # Claude handoff: KT-01 Corporate Knowledge Assistant
 
-Read this first when you pick up this project in a new session. It records what the project is, how it runs, the decisions already taken, and what is left. Last updated: 2026-11-05.
+Read this first when you pick up this project in a new session. It records what the project is, how it runs, the decisions already taken, and what is left. Last updated: 2026-11-13.
 
 ## What it is
 
@@ -66,6 +66,7 @@ Next.js 16 (read `node_modules/next/dist/docs` before changing Next code; see AG
 | `scripts/google-login.ts` | One-time OAuth sign-in (`npm run google-login`); the user pastes the redirect URL. |
 | `app/page.tsx`, `app/api/chat` | Local web chat. Off in production unless `WEB_CHAT_ENABLED=true`. |
 | `Dockerfile`, `.dockerignore`, `.gcloudignore` | Ready for Google Cloud Run (standalone output). |
+| `lib/meetings/`, `app/api/cron/meeting-uploads/route.ts`, `scripts/meeting-uploads.ts` | The hourly client meeting uploads from Fireflies to a Chat space (see below). |
 | `scripts/sync.ts`, `scripts/chat-bot.ts` | Legacy: Slack index sync and the local Pub/Sub worker. Not used in production. |
 
 ### Answer pipeline (`answerQuestion`)
@@ -134,6 +135,29 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
   - as a made-up colleague, posting was refused, a search "including private channels and DMs" used public search only, and a DM question and a DM link were refused without any Slack call;
   - "every channel Helmi is in, private ones too" listed only public channels, but took 139 member lookups.
 
+### Client meeting uploads (since 2026-11-13)
+
+Every hour, the bot posts each new client meeting from Michael's Fireflies to the "Client Meeting Uploads" Google Chat space (`MEETING_UPLOADS_SPACE`), as the Knowledge Assistant. A post has the client and title in bold, the time in GMT and the length, a summary of 2 or 3 sentences, and the Fireflies transcript link.
+- **How a meeting is sorted** (`lib/meetings/uploads.ts`):
+  1. A regular meeting never counts. That's the same calendar series on an earlier day (Google's `_R<date>` ids too), or the same title on 2 or more earlier days, within 90 days. The user's rule: a meeting that happens again and again is project work (dailies, workshops, jour fixe, steering committees).
+  2. If Fireflies made no summary, the meeting is skipped. If the summary isn't ready yet, the meeting is tried again the next hour.
+  3. Claude decides the rest (`claude-opus-5-5`, or `MEETINGS_MODEL`). It posts one-off business meetings with a client or prospect: an introduction, a demo, a new use case or proposal, commercial talk, or a catch-up with a client's manager. It doesn't post working sessions on agreed work (kick-offs of agreed work, workshops, spec reviews, UAT, rollout), or internal, investor, hiring and supplier meetings.
+  4. If the Claude call fails, the meeting is left for the next run.
+- **Memory:** Postgres table `meeting_uploads` (transcript id, `posted` or `skipped`, client, reason, the Chat message). Each meeting is decided once. A post is claimed in the table before it's sent, so two runs can't post it twice.
+- **What runs it:** the Railway cron service `[KT-01] meeting-uploads-cron` (id `571da0ee-ab2f-4223-9da0-4c94b8d1bcde`) in the KT-01 project.
+  - Image `curlimages/curl:8.11.1`, schedule `0 * * * *` (UTC), never restarted.
+  - It POSTs to `JOB_URL`, which is the bot's `/api/cron/meeting-uploads`, with `Authorization: Bearer $CRON_SECRET`.
+  - The route runs one pass and returns `{posted, skipped, waiting}`. Its log lines start with `[meetings]`, in the bot service's logs.
+  - Each run looks at the meetings of the last 2 days only.
+- **Variables:**
+  - On the bot: `FIREFLIES_API_KEY` (Michael's), `MEETING_UPLOADS_SPACE` and `CRON_SECRET`.
+  - On the cron service: `CRON_SECRET` (the same value) and `JOB_URL`.
+- **By hand:**
+  - `npm run meeting-uploads -- draft <from> <to> <file.json>` is a dry run that posts nothing.
+  - `post <file.json> <id,id,...>` posts those drafts and records the rest of the file as skipped.
+  - `run` does one pass of the hourly job.
+- **Backfill on 2026-11-13:** 410 meetings from 2026-08-13 to 2026-11-13 were sorted. The user approved 3 of the 19 proposed posts, and the rest are recorded as skipped. Michael also posts meetings by hand; the job doesn't check the space for those.
+
 ## Hosting and deploy
 
 - **Railway (the new host, set up 2026-10-17):** service `[KT-01] knowledge-assistant` (id `8acf5eb2-3d59-4e31-8237-bf66d33a68fc`) in the **KT-01** project of the NDI workspace (id `6f5ceacd-abb7-4484-990a-82a2ffe81ba2`, beside `nsc-knowledge-assistant`), environment production (id `a7b31a41-812e-43d1-a353-503b7f80c2ef`), URL https://kt-01-knowledge-assistant-production.up.railway.app.
@@ -160,7 +184,8 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
   - Claude: `ANTHROPIC_API_KEY`.
   - Google and Chat: `CHAT_BOT_KEY_JSON`, `GOOGLE_OAUTH_CLIENT_JSON`, `GOOGLE_USER_TOKEN_JSON`, `GOOGLE_DRIVE_ID`, `CHAT_ALLOWED_DOMAINS`, `CHAT_ENDPOINT_URL`, `CHAT_ADDON_SERVICE_ACCOUNT`, `WEB_CHAT_ENABLED=false`.
   - Sources and storage: `YOUTUBE_CHANNEL`, `AI_CATALOG_FILE_ID`, `AI_TRACKER_FILE_ID`, `DATABASE_URL`.
-  - Managed Agent: `MA_AGENT_ID`, `MA_ENVIRONMENT_ID`, `MA_FIREFLIES_VAULT_ID`, plus `AGENT_TRIAL_USERS` (emails that get the agent) or `ASSISTANT_ENGINE=agent` (everyone). `FIREFLIES_API_KEY` and `MA_DRIVE_SKILL_ID` are only needed where `npm run managed-agent` runs.
+  - Managed Agent: `MA_AGENT_ID`, `MA_ENVIRONMENT_ID`, `MA_FIREFLIES_VAULT_ID`, plus `AGENT_TRIAL_USERS` (emails that get the agent) or `ASSISTANT_ENGINE=agent` (everyone). `MA_DRIVE_SKILL_ID` is only needed where `npm run managed-agent` runs.
+  - Meeting uploads: `FIREFLIES_API_KEY`, `MEETING_UPLOADS_SPACE`, `CRON_SECRET`.
   - The calendar zone defaults to GMT (`CALENDAR_TIME_ZONE`).
   - Store them as **encrypted**, never as Vercel's "sensitive" type. Sensitive values can never be read back — not by the API, the CLI or the dashboard — so the old project's credentials were unrecoverable and had to be made again from Google.
 - **Google sign-in:** if the user OAuth token expires or scopes change, run `npm run google-login` and send the user the link. They paste back the redirect URL, which you pipe into the script. Then update `GOOGLE_USER_TOKEN_JSON` on Railway.
@@ -253,6 +278,6 @@ Anthropic runs the agent loop; our code only bridges Google Chat and runs our ow
 - Never commit Drive file names or ids, client details or anything from `data/` or `secrets/`.
 - **Railway can lose a service's variables.** On 2026-10-28, during Railway's incident, 18 of the 31 POCs services lost every variable; this one lost its 18. Railway's change history shows no removal, so the cause was on Railway's side.
   - A running copy keeps the variables it started with, so nothing shows until the next deploy. That deploy starts with none, and every Chat message fails: the endpoint returns 500 "CHAT_ENDPOINT_URL and CHAT_ADDON_SERVICE_ACCOUNT must be set".
-  - Check by listing names only: `railway variable list --json --service "[KT-01] knowledge-assistant"`. The bot needs 18 besides the `RAILWAY_*` ones.
+  - Check by listing names only: `railway variable list --json --service "[KT-01] knowledge-assistant"`. The bot needs 21 besides the `RAILWAY_*` ones (18 before the meeting uploads, 2026-11-13).
   - Restore from the snapshot of a deployment that still had them, which holds the real values unmasked: GraphQL `deploymentSnapshot(deploymentId) { variables }`, through `railway api`. The change history (`environmentPatches`) gives only the names, with every value masked as `*****`. Vercel's production copy works as a fallback, with `CHAT_ENDPOINT_URL` pointed at Railway and the `MA_*` ids plus `ASSISTANT_ENGINE=agent` added.
   - Write each value with `railway variable set KEY --stdin --skip-deploys`, run from this folder (the CLI matches the linked folder by its exact path, `C:\Users\…`), then `railway redeploy`. A 401 from a bare POST to `/api/google-chat` means the variables are loaded.
